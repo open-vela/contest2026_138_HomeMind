@@ -1,0 +1,3 @@
+nuttx/arch/sim/Kconfig:113:	default SIM_X8664_SYSTEMV if HOST_LINUX
+nuttx/arch/sim/Kconfig:117:config SIM_X8664_SYSTEMV
+nuttx/arch/sim/src/sim/sim_fork_x86_64.S:104:#else /* if defined(CONFIG_SIM_X8664_SYSTEMV) */

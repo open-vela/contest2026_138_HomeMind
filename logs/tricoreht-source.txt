@@ -1,0 +1,1 @@
+nuttx/drivers/hwtracing/Kconfig:48:source "drivers/hwtracing/tricoreht/Kconfig"

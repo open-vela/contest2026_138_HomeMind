@@ -1,0 +1,63 @@
+<!-- pages/devices/devices.wxml -->
+<view class="container">
+  <view class="card">
+    <view class="flex-row" style="justify-content: space-between;">
+      <view class="card-title">我的设备</view>
+      <view class="add-btn" bindtap="addDevice">+ 添加设备</view>
+    </view>
+
+    <view class="device-list" wx:if="{{devices.length > 0}}">
+      <view class="device-item" wx:for="{{devices}}" wx:key="id">
+        <view class="device-icon">
+          <text wx:if="{{item.led_state === 'on'}}">💡</text>
+          <text wx:else>📱</text>
+        </view>
+        <view class="device-info">
+          <view class="device-name">{{item.name}}</view>
+          <view class="device-location">{{item.online ? '在线' : '离线'}}</view>
+        </view>
+        <view class="device-status">
+          <view class="status-dot {{item.online ? 'online' : 'offline'}}"></view>
+          <view class="status-text">{{item.online ? '在线' : '离线'}}</view>
+        </view>
+        <view class="device-actions">
+          <view class="action-btn toggle {{item.led_state === 'pending' ? 'disabled' : ''}}"
+                bindtap="toggleDevice" data-id="{{item.id}}">
+            {{item.led_state === 'on' ? '关闭' : (item.led_state === 'pending' ? '执行中' : '开启')}}
+          </view>
+          <view class="action-btn delete" bindtap="deleteDevice" data-id="{{item.id}}">移除</view>
+        </view>
+      </view>
+    </view>
+
+    <view class="empty-state" wx:else>
+      <view class="empty-icon">📱</view>
+      <view class="empty-text">{{loading ? '加载中…' : '暂无设备'}}</view>
+      <view class="empty-hint">{{loading ? '' : '登录后自动绑定 HomeMind 设备'}}</view>
+    </view>
+  </view>
+
+  <view class="modal" wx:if="{{showAddModal}}">
+    <view class="modal-mask" bindtap="hideAddModal"></view>
+    <view class="modal-content">
+      <view class="modal-header">
+        <view class="modal-title">绑定设备</view>
+        <view class="modal-close" bindtap="hideAddModal">✕</view>
+      </view>
+      <view class="modal-body">
+        <view class="form-item">
+          <view class="form-label">设备 ID</view>
+          <input class="form-input" placeholder="如 esp32s3-eye" value="{{newDevice.device_id}}" bindinput="onInputChange" data-field="device_id" />
+        </view>
+        <view class="form-item">
+          <view class="form-label">备注名</view>
+          <input class="form-input" placeholder="如 客厅 HomeMind" value="{{newDevice.name}}" bindinput="onInputChange" data-field="name" />
+        </view>
+      </view>
+      <view class="modal-footer">
+        <view class="btn btn-cancel" bindtap="hideAddModal">取消</view>
+        <view class="btn btn-confirm" bindtap="confirmAdd">确定</view>
+      </view>
+    </view>
+  </view>
+</view>
