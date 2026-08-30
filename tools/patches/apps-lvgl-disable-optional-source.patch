@@ -1,0 +1,12 @@
+diff --git a/graphics/lvgl/Kconfig b/graphics/lvgl/Kconfig
+index ad64595..8f607c6 100644
+--- a/graphics/lvgl/Kconfig
++++ b/graphics/lvgl/Kconfig
+@@ -25,6 +25,6 @@ config LV_GPU_G2D_INCLUDE_PATH
+ 	depends on LV_USE_DRAW_G2D
+ 	default ""
+ 
+-osource "$APPSDIR/graphics/lvgl/lvgl/Kconfig"
++# osource "$APPSDIR/graphics/lvgl/lvgl/Kconfig"
+ 
+ endif # GRAPHICS_LVGL

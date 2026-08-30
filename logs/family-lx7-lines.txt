@@ -1,0 +1,5 @@
+nuttx/arch/xtensa/Kconfig:51:	select ARCH_FAMILY_LX7
+nuttx/arch/xtensa/Kconfig:79:	select ARCH_FAMILY_LX7
+nuttx/arch/xtensa/Kconfig:196:config ARCH_FAMILY_LX7
+nuttx/arch/xtensa/include/irq.h:62:#elif CONFIG_ARCH_FAMILY_LX7
+nuttx/arch/xtensa/src/Makefile:28:ifeq ($(CONFIG_ARCH_FAMILY_LX7),y)

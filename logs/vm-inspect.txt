@@ -1,0 +1,25 @@
+===OS===
+PRETTY_NAME="Ubuntu 22.04.5 LTS"
+NAME="Ubuntu"
+VERSION_ID="22.04"
+VERSION="22.04.5 LTS (Jammy Jellyfish)"
+VERSION_CODENAME=jammy
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=jammy
+===RESOURCE===
+4
+               total        used        free      shared  buff/cache   available
+Mem:           7.7Gi       1.1Gi       5.4Gi        35Mi       1.2Gi       6.3Gi
+Swap:          2.0Gi          0B       2.0Gi
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda3        59G   14G   42G  25% /
+===TOOLS===
+/usr/bin/git
+/usr/bin/python3
+===HOME===
+===FILES===

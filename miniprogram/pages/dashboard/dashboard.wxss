@@ -1,0 +1,159 @@
+/* pages/dashboard/dashboard.wxss */
+
+.sensor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20rpx;
+  margin-top: 20rpx;
+}
+
+.sensor-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20rpx;
+  background-color: #F8F9FA;
+  border-radius: 12rpx;
+}
+
+.sensor-icon {
+  font-size: 48rpx;
+  margin-bottom: 10rpx;
+}
+
+.sensor-value {
+  font-size: 36rpx;
+  font-weight: 600;
+  color: #333333;
+}
+
+.sensor-label {
+  font-size: 24rpx;
+  color: #999999;
+  margin-top: 5rpx;
+}
+
+.device-stats {
+  display: flex;
+  justify-content: space-around;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.stat-number {
+  font-size: 48rpx;
+  font-weight: 600;
+}
+
+.stat-number.online {
+  color: #52C41A;
+}
+
+.stat-number.offline {
+  color: #FF4D4F;
+}
+
+.stat-number.total {
+  color: #4A90E2;
+}
+
+.stat-label {
+  font-size: 24rpx;
+  color: #999999;
+  margin-top: 10rpx;
+}
+
+.alert-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.alert-item {
+  display: flex;
+  align-items: center;
+  padding: 16rpx;
+  margin-bottom: 10rpx;
+  background-color: #FFFBE6;
+  border-radius: 8rpx;
+  border-left: 4rpx solid #FAAD14;
+}
+
+.alert-item.high {
+  background-color: #FFF2F0;
+  border-left-color: #FF4D4F;
+}
+
+.alert-item.medium {
+  background-color: #FFF7E6;
+  border-left-color: #FA8C16;
+}
+
+.alert-icon {
+  font-size: 32rpx;
+  margin-right: 16rpx;
+}
+
+.alert-content {
+  flex: 1;
+}
+
+.alert-title {
+  font-size: 28rpx;
+  color: #333333;
+}
+
+.alert-time {
+  font-size: 24rpx;
+  color: #999999;
+  margin-top: 4rpx;
+}
+
+.alert-dismiss {
+  font-size: 28rpx;
+  color: #999999;
+  padding: 10rpx;
+}
+
+.empty-state {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 40rpx;
+  color: #999999;
+  font-size: 28rpx;
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20rpx;
+  margin-top: 20rpx;
+}
+
+.action-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20rpx;
+  background-color: #F0F5FF;
+  border-radius: 12rpx;
+}
+
+.action-icon {
+  font-size: 48rpx;
+  margin-bottom: 10rpx;
+}
+
+.action-text {
+  font-size: 24rpx;
+  color: #4A90E2;
+}
+
+.view-all {
+  font-size: 24rpx;
+  color: #4A90E2;
+}

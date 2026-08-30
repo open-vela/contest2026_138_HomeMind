@@ -1,0 +1,86 @@
+{
+  "captured_at": "2026-08-30",
+  "source_root": "/home/hfy/work/openvela/packages/ai_agent",
+  "files": [
+    {
+      "path": "Makefile",
+      "sha256": "2a2bf63552d34e3fac438e31e081659276b77b90a9188496611d24fe6cd8e1f7",
+      "size": 5820
+    },
+    {
+      "path": "src/agent_main.c",
+      "sha256": "849de253322f80accc2ca69176184a35c3094c33b667e28f7a850cfa3948b63d",
+      "size": 26159
+    },
+    {
+      "path": "src/channels/cmd_llm.c",
+      "sha256": "af49bc1adac96771e30c3fed1ff893bd59bb41d3a8cb66935523401e0a9fb74b",
+      "size": 21506
+    },
+    {
+      "path": "src/channels/nsh_commands.c",
+      "sha256": "0e8e2f80c749cb64ca33af4d3e1bd9845fd376c90ab12d1a3f21c433a0b3f549",
+      "size": 40658
+    },
+    {
+      "path": "src/core/agent_loop.c",
+      "sha256": "adb1de9f5e5ded8f8cc3428037f1b58efbbef188834bc7ceb3528e63e1026256",
+      "size": 56176
+    },
+    {
+      "path": "src/infra/config_store.c",
+      "sha256": "f868675a8c6cbe04f57122a456139d6eaad3dc2e83c98dcbf849fe734d8ac0a6",
+      "size": 5021
+    },
+    {
+      "path": "src/infra/http_proxy.c",
+      "sha256": "a99c775aa06d24a5beb79a928e01fa6b18a792ba55d462a765b68d228d70ef06",
+      "size": 12880
+    },
+    {
+      "path": "src/infra/network_manager.c",
+      "sha256": "5613df6d40005e2a50b6415a7e2d4af976be3fdf7bd67938935b55b467e09559",
+      "size": 44916
+    },
+    {
+      "path": "src/infra/vela_tls.c",
+      "sha256": "90c796216bfd1c830a53c6f870290a1460081bc6cc543902334688bcb3afa517",
+      "size": 50952
+    },
+    {
+      "path": "src/tools/tool_device.c",
+      "sha256": "c7247642cdd1b91052f386f3e5b44982bb8e6d99e1cd1ec10cc85bb25ef94eb8",
+      "size": 3002
+    },
+    {
+      "path": "src/tools/tool_led.c",
+      "sha256": "6fdd7be0703bf9a34e021f42749790bc7eac44730bbb900217c98aadb5118f7e",
+      "size": 2568
+    },
+    {
+      "path": "src/tools/tool_registry.c",
+      "sha256": "560ad19014ca404c1c478cf51fd8c6786a41e17162e3ea69fa97ee82bada9c67",
+      "size": 22932
+    },
+    {
+      "path": "src/ui/hm_lcd_display.c",
+      "sha256": "f4324c337402bf71f8e6cfaf6efa3fab9eba9757409f828639fab0126a73735f",
+      "size": 26646
+    },
+    {
+      "path": "include/tools/tool_device.h",
+      "sha256": "4348128b6a09ce3265f7b0fb68f9c4bb47aacb5b76a426f01b15c87d674d66d0",
+      "size": 467
+    },
+    {
+      "path": "include/tools/tool_led.h",
+      "sha256": "247ca9ee465d7d746acb61f5a88376beb714b851cc086c540f72942b2f57a9a2",
+      "size": 321
+    },
+    {
+      "path": "include/ui/hm_lcd_display.h",
+      "sha256": "d32db169646442b3a0696d7cc45f791e8561dabc32e681d77d0d0fa7ad18f12e",
+      "size": 233
+    }
+  ]
+}

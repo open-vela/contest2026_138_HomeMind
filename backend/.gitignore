@@ -1,0 +1,10 @@
+# 密钥与运行数据绝不进仓库
+.env
+*.db
+api/data/
+certs/
+mosquitto/data/
+mosquitto/log/
+mosquitto/password.txt
+__pycache__/
+*.pyc

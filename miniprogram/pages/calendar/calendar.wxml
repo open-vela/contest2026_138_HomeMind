@@ -1,0 +1,86 @@
+<!-- pages/calendar/calendar.wxml -->
+<view class="container">
+  <!-- 日期选择 -->
+  <view class="card">
+    <view class="card-title">选择日期</view>
+    <picker mode="date" value="{{selectedDate}}" bindchange="onDateChange">
+      <view class="date-picker">
+        <view class="date-icon">📅</view>
+        <view class="date-text">{{selectedDate}}</view>
+      </view>
+    </picker>
+  </view>
+
+  <!-- 日程列表 -->
+  <view class="card">
+    <view class="flex-row" style="justify-content: space-between;">
+      <view class="card-title">日程安排</view>
+      <view class="add-btn" bindtap="addCalendar">+ 添加日程</view>
+    </view>
+    
+    <view class="calendar-list" wx:if="{{calendarList.length > 0}}">
+      <view class="calendar-item" wx:for="{{calendarList}}" wx:key="id">
+        <view class="calendar-time-col">
+          <view class="calendar-time">{{item.time || '--:--'}}</view>
+          <view class="calendar-date">{{item.date}}</view>
+        </view>
+        <view class="calendar-content">
+          <view class="calendar-title">{{item.title}}</view>
+          <view class="calendar-desc" wx:if="{{item.description}}">{{item.description}}</view>
+          <view class="calendar-reminder" wx:if="{{item.reminder}}">
+            <view class="reminder-icon">🔔</view>
+            <view class="reminder-text">提醒未接入（仅保存日程）</view>
+          </view>
+        </view>
+        <view class="calendar-actions">
+          <view class="action-btn delete" bindtap="deleteCalendar" data-id="{{item.id}}">删除</view>
+        </view>
+      </view>
+    </view>
+    
+    <view class="empty-state" wx:else>
+      <view class="empty-icon">📅</view>
+      <view class="empty-text">暂无日程</view>
+      <view class="empty-hint">点击上方按钮添加日程</view>
+    </view>
+  </view>
+
+  <!-- 添加日程弹窗 -->
+  <view class="modal" wx:if="{{showAddModal}}">
+    <view class="modal-mask" bindtap="hideAddModal"></view>
+    <view class="modal-content">
+      <view class="modal-header">
+        <view class="modal-title">添加日程</view>
+        <view class="modal-close" bindtap="hideAddModal">✕</view>
+      </view>
+      <view class="modal-body">
+        <view class="form-item">
+          <view class="form-label">日程标题</view>
+          <input class="form-input" placeholder="请输入日程标题" value="{{newCalendar.title}}" bindinput="onInputChange" data-field="title" />
+        </view>
+        <view class="form-item">
+          <view class="form-label">时间</view>
+          <picker mode="time" value="{{newCalendar.time}}" bindchange="onInputChange" data-field="time">
+            <view class="form-picker">
+              {{newCalendar.time || '选择时间'}}
+            </view>
+          </picker>
+        </view>
+        <view class="form-item">
+          <view class="form-label">描述</view>
+          <textarea class="form-textarea" placeholder="请输入日程描述" value="{{newCalendar.description}}" bindinput="onInputChange" data-field="description" />
+        </view>
+        <view class="form-item">
+          <view class="flex-row" style="justify-content: space-between;">
+            <view class="form-label">日程提醒</view>
+            <view class="form-picker">未接入，当前仅保存到本机</view>
+          </view>
+        </view>
+      </view>
+      <view class="modal-footer">
+        <view class="btn btn-cancel" bindtap="hideAddModal">取消</view>
+        <view class="btn btn-confirm" bindtap="confirmAdd">确定</view>
+      </view>
+    </view>
+  </view>
+</view>

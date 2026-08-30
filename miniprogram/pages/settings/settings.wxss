@@ -1,0 +1,133 @@
+/* pages/settings/settings.wxss */
+
+.setting-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20rpx 0;
+  border-bottom: 1rpx solid #F0F0F0;
+}
+
+.setting-item:last-child {
+  border-bottom: none;
+}
+
+.setting-info {
+  flex: 1;
+}
+
+.setting-name {
+  font-size: 30rpx;
+  color: #333333;
+}
+
+.setting-desc {
+  font-size: 24rpx;
+  color: #999999;
+  margin-top: 4rpx;
+}
+
+.config-item {
+  padding: 16rpx 0;
+  border-bottom: 1rpx solid #F0F0F0;
+}
+
+.config-item:last-child {
+  border-bottom: none;
+}
+
+.config-label {
+  font-size: 26rpx;
+  color: #666666;
+  margin-bottom: 8rpx;
+}
+
+.config-input {
+  width: 100%;
+  height: 72rpx;
+  padding: 0 16rpx;
+  background-color: #F5F5F5;
+  border-radius: 8rpx;
+  font-size: 28rpx;
+}
+
+.config-value {
+  font-size: 28rpx;
+  color: #333333;
+  padding: 16rpx;
+  background-color: #F5F5F5;
+  border-radius: 8rpx;
+}
+
+.action-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24rpx 0;
+  border-bottom: 1rpx solid #F0F0F0;
+}
+
+.action-item:last-child {
+  border-bottom: none;
+}
+
+.action-info {
+  display: flex;
+  align-items: center;
+}
+
+.action-icon {
+  font-size: 36rpx;
+  margin-right: 16rpx;
+}
+
+.action-name {
+  font-size: 30rpx;
+  color: #333333;
+}
+
+.action-arrow {
+  font-size: 28rpx;
+  color: #999999;
+}
+
+.version-info {
+  text-align: center;
+  padding: 40rpx;
+  color: #999999;
+  font-size: 24rpx;
+}
+
+/* 登录按钮（与 devices 页保持一致） */
+.action-btn {
+  min-width: 96rpx;
+  text-align: center;
+  padding: 10rpx 24rpx;
+  border-radius: 32rpx;
+  font-size: 26rpx;
+  color: #ffffff;
+  background-color: #4A90E2;
+}
+
+.action-btn.delete {
+  background-color: #E74C3C;
+}
+
+.action-btn.disabled {
+  opacity: 0.5;
+}
+
+.status-dot {
+  width: 20rpx;
+  height: 20rpx;
+  border-radius: 50%;
+  margin-left: 8rpx;
+}
+
+.status-dot.online {
+  background-color: #2ECC71;
+}
+
+.status-dot.offline {
+  background-color: #BBBBBB;
+}
