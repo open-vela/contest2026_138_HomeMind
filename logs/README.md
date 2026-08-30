@@ -76,3 +76,4 @@ contest-snapshot --today --confirm
 ## 6. 官方参考
 
 - [AI Coding 日志归集与提交手册](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/ai_coding_log_guide.md)
+
