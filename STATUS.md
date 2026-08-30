@@ -10,7 +10,7 @@
 - **构建产物**：`artifacts/nuttx.bin|elf` 与 `SHA256SUMS`（`418044b0…`/`439c0006…`）自校验一致。**待核对**：与本文 2026-08-30 各节记录的最新烧录固件哈希（`ee22ee60…`）尚未对应，需确认 artifacts 是否为最终交付构建。
 - **秘密审计**：全树扫描无 API key、密码、私钥、PAT 等真实凭据（32 处命中均为 `<ssid> <password>` 类帮助占位符）；`fei` 为官方基线 feishu 组件名，非敏感。历史泄露过的 Wi-Fi/登录凭据**仍需轮换**。
 - **假数据清理**：小程序固定温湿度/光照/噪声与假成功逻辑已移除，dashboard 以 `'--'` 占位并明确标注"未接入"；`backend/data/`、`server/data/` 等本地运行数据已加入 `.gitignore`。
-- **官方模板**：`docs/submission/2026首届openvela_AI硬件开发者大赛_作品提交模板_官方原版.docx` 已下载并验证；官方示例日志占位（`logs/your-github-login/`）已删除，AI 日志导出待真实 GitHub 登录名确认后补齐。
+- **官方模板**：`docs/submission/2026首届openvela_AI硬件开发者大赛_作品提交模板_官方原版.docx` 已下载并验证，并已建立"只填写事实"的工作副本 `HomeMind_作品提交模板_事实工作副本.docx`（信息表/摘要/AI-Native 表已填已验证事实，未确认项显式标注待补充）；官方示例日志占位（`logs/your-github-login/`）已删除，AI 日志导出待真实 GitHub 登录名确认后补齐。
 
 ## 总体判断
 
