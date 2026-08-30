@@ -12,6 +12,21 @@
 - **假数据清理**：小程序固定温湿度/光照/噪声与假成功逻辑已移除，dashboard 以 `'--'` 占位并明确标注"未接入"；`backend/data/`、`server/data/` 等本地运行数据已加入 `.gitignore`。
 - **官方模板**：`docs/submission/2026首届openvela_AI硬件开发者大赛_作品提交模板_官方原版.docx` 已下载并验证，并已建立"只填写事实"的工作副本 `HomeMind_作品提交模板_事实工作副本.docx`（信息表/摘要/AI-Native 表已填已验证事实，未确认项显式标注待补充）；官方示例日志占位（`logs/your-github-login/`）已删除，AI 日志导出待真实 GitHub 登录名确认后补齐。
 
+## 2026-08-31 暂停点：干净工作区真实复现（进行中，明日续）
+
+**背景**：M0 文档收口已全部提交至本地分支 `contest-final`（`dc4caeb` M0 主提交 → `21fa4d7`/`e3f6920` 模板与状态 → `65b4f54` AI 日志 → `9050a39` 脚本可执行位）。**未推送远端**。AI 日志已导出 6 个真实 Codex 会话至 `logs/2760216167@qq.com/`（manifest 含 12 个整文件剔除记录及原因）。
+
+**已核实的关键事实（Ubuntu 侧）**：
+- 旧生产工作区 `~/work/openvela` = NuttX 基线 `dd92bcf` + 未提交的 HomeMind 修改；`vendor/openvela/boards` 为空占位（板级支持在 nuttx 树内）；apps 内 mbedtls/cJSON/littlefs 等第三方源码为**未跟踪的离线布置**（repo checkout 不会带出）；旧区 `nuttx/.git` 元数据损坏（rev-list 挂死），勿再对其做 git 操作。
+- 干净工作区 `~/work/openvela-clean-20260830`：manifests 走本地 bare（`~/work/homemind-manifest-local.git`）；repo 相对 fetch `../open-vela/` 解析到 `/home/hfy/open-vela`，已建为 20 个项目镜像（objects/info/alternates 指向旧区对象库，零拷贝、旧区只读）；repo 工具经 `url.insteadOf` 重定向到本地镜像 `_git-repo.git`。repo sync 已完成 10 个 git 项目 + contest-final（65b4f54，经 bundle `~/work/transfer/contest-final.bundle` 接入）+ extras 补拷（mbedtls/cJSON 等，日志 `~/work/clean-extras.log`）。
+- **部署已通过**：`tools/deploy-to-vm.sh` 在干净区执行成功——16 个 overlay 文件安装 + NuttX 补丁"已应用"校验通过（= 补丁与旧区树逐字节一致的复现性证据）。kconfig 全部调整与 TLS1.3 关闭已生效。
+- **首次构建失败**：因 apps 内第三方离线源码缺失（mbedtls v3.4.0.zip / cJSON v1.7.12.tar.gz 被网络阻断），extras 补拷已修复，尚未重跑。
+
+**明日第一步**：`nohup bash /home/hfy/work/build_run.sh &`（内容：`OPENVELA_ROOT=~/work/openvela-clean-20260830 JOBS=2 ./scripts/build.sh deploy && build`；日志 `~/work/clean-build-entry.log` 与 `logs/homemind/build.log`；预计 40–60 分钟）。
+**随后**：① 比对干净区产物 SHA-256 与官方仓 `artifacts/SHA256SUMS`（`418044b0…`/`439c0006…`）及 STATUS 最新烧录哈希（`ee22ee60…`），把三者关系写入本文件；② 一致则 M0"从干净目录完成一次构建"复选框可勾选；③ 推送 contest-final 至 GitHub 远端（需用户确认）。
+
+**访问方式**：`python transfer/sshx.py <cmd文件> [超时秒]`，需先设置 `HOMEMIND_SSH_PASSWORD` 环境变量（密码不落盘）。已知坑：paramiko 通道静默超时会掐断长命令，长任务一律 `nohup … & echo PID` 后轮询日志；`pgrep -f` 会自匹配，结束判断看日志标记（STAGE-DONE / BUILD-ENTRY-DONE / EXTRAS-DONE）。
+
 ## 总体判断
 
 Ubuntu 主机、OpenVela 工作区、固定依赖、串口权限和服务器地址 `192.168.31.251` 均已验证可用。官方 ai_agent 基线与 HomeMind 固件可重复构建、烧录和校验。DIO 镜像封装、Wi-Fi 互斥锁死锁、同名 SSID 的最强 BSSID 选择、关联时序和 DHCP UDP 资源池问题均已处理；当前固件可锁定强 AP `50:88:11:7a:02:69`，达到 `ESSID_ON`、72 Mbps，并连续两次从冷启动流程通过 DHCP 获得 `192.168.31.249`。P0 已从 DHCP 推进到 HTTPS/TLS：`net_test` 开始访问后未在 70 秒内返回，TLS 和 MiMo 尚未验收。
