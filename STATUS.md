@@ -7,12 +7,12 @@
 
 - **官方仓收口**：从 Ubuntu 官方仓 bundle 建立干净工作副本（`dev-ai-contest-2026` 基础上新建本地分支 `contest-final`），旧 detached-HEAD 现场未做任何改动，可随时回退对比；本提交前**未推送远端**。
 - **固件源码收口**：`firmware/ai_agent_overlay/`（16 个 ai_agent 文件精确 overlay + `SOURCE_SNAPSHOT.json` 溯源）与 `firmware/patches/0001-homemind-esp32s3-nuttx.patch`（相对 NuttX 基线 `dd92bcf4`，491 行，已在干净文件树 dry-run 通过，可重复执行幂等）。
-- **构建产物**：`artifacts/nuttx.bin|elf` 与 `SHA256SUMS`（`418044b0…`/`439c0006…`）自校验一致。**待核对**：与本文 2026-08-30 各节记录的最新烧录固件哈希（`ee22ee60…`）尚未对应，需确认 artifacts 是否为最终交付构建。
+- **构建产物**：原提交中的 `artifacts/nuttx.bin|elf` 与 `SHA256SUMS`（`418044b0…`/`439c0006…`）自校验一致；2026-08-31 已由干净工作区重建并更新为 `902ccdaa…`/`c10e1e64…`，详见下方构建记录。
 - **秘密审计**：全树扫描无 API key、密码、私钥、PAT 等真实凭据（32 处命中均为 `<ssid> <password>` 类帮助占位符）；`fei` 为官方基线 feishu 组件名，非敏感。历史泄露过的 Wi-Fi/登录凭据**仍需轮换**。
 - **假数据清理**：小程序固定温湿度/光照/噪声与假成功逻辑已移除，dashboard 以 `'--'` 占位并明确标注"未接入"；`backend/data/`、`server/data/` 等本地运行数据已加入 `.gitignore`。
 - **官方模板**：`docs/submission/2026首届openvela_AI硬件开发者大赛_作品提交模板_官方原版.docx` 已下载并验证，并已建立"只填写事实"的工作副本 `HomeMind_作品提交模板_事实工作副本.docx`（信息表/摘要/AI-Native 表已填已验证事实，未确认项显式标注待补充）；官方示例日志占位（`logs/your-github-login/`）已删除，AI 日志导出待真实 GitHub 登录名确认后补齐。
 
-## 2026-08-31 暂停点：干净工作区真实复现（进行中，明日续）
+## 2026-08-31 干净工作区真实复现（构建完成，待真机验收）
 
 **背景**：M0 文档收口已全部提交至本地分支 `contest-final`（`dc4caeb` M0 主提交 → `21fa4d7`/`e3f6920` 模板与状态 → `65b4f54` AI 日志 → `9050a39` 脚本可执行位）。**未推送远端**。AI 日志已导出 6 个真实 Codex 会话至 `logs/2760216167@qq.com/`（manifest 含 12 个整文件剔除记录及原因）。
 
@@ -20,10 +20,12 @@
 - 旧生产工作区 `~/work/openvela` = NuttX 基线 `dd92bcf` + 未提交的 HomeMind 修改；`vendor/openvela/boards` 为空占位（板级支持在 nuttx 树内）；apps 内 mbedtls/cJSON/littlefs 等第三方源码为**未跟踪的离线布置**（repo checkout 不会带出）；旧区 `nuttx/.git` 元数据损坏（rev-list 挂死），勿再对其做 git 操作。
 - 干净工作区 `~/work/openvela-clean-20260830`：manifests 走本地 bare（`~/work/homemind-manifest-local.git`）；repo 相对 fetch `../open-vela/` 解析到 `/home/hfy/open-vela`，已建为 20 个项目镜像（objects/info/alternates 指向旧区对象库，零拷贝、旧区只读）；repo 工具经 `url.insteadOf` 重定向到本地镜像 `_git-repo.git`。repo sync 已完成 10 个 git 项目 + contest-final（65b4f54，经 bundle `~/work/transfer/contest-final.bundle` 接入）+ extras 补拷（mbedtls/cJSON 等，日志 `~/work/clean-extras.log`）。
 - **部署已通过**：`tools/deploy-to-vm.sh` 在干净区执行成功——16 个 overlay 文件安装 + NuttX 补丁"已应用"校验通过（= 补丁与旧区树逐字节一致的复现性证据）。kconfig 全部调整与 TLS1.3 关闭已生效。
-- **首次构建失败**：因 apps 内第三方离线源码缺失（mbedtls v3.4.0.zip / cJSON v1.7.12.tar.gz 被网络阻断），extras 补拷已修复，尚未重跑。
+- **第三方离线依赖补齐**：目录同步遗漏了 `apps/crypto/mbedtls/v3.4.0.zip` 与 `apps/netutils/cjson/v1.7.12.tar.gz` 两个根目录归档；已从旧区复制到干净区并完成 SHA-256 校验。首次重跑因此失败；随后将两个残留解包目录按时间戳移出并保留备份，再从归档重新解包。
+- **干净构建已完成**：在 `/home/hfy/work/openvela-clean-20260830` 使用 `OPENVELA_ROOT=~/work/openvela-clean-20260830 JOBS=2 ./scripts/build.sh deploy` 后执行 `build`，日志标记 `BUILD-OK` / `BUILD-ENTRY-DONE`。最终产物：BIN `902ccdaa2109d8a2b1ecc8d5247b58d4788078eb4689e7390ee4124ec115ef56`，ELF `c10e1e64bee0f989accd4dacf6fae6ce8327ead8d386aeda7b87835ab9fd8e87`。
+- **哈希关系**：新干净构建与官方仓此前产物 `418044b0…` / `439c0006…`、STATUS 中历史烧录固件 `ee22ee60…` 均不一致；因此旧哈希视为历史构建/烧录记录，不能冒充本次干净构建。官方仓本地 `artifacts/` 已更新为本次构建结果并自校验一致。
+- **当前边界**：本次只完成构建和产物回收，尚未将 `902ccdaa…` 固件烧录到 ESP32-S3，也未进行 Wi-Fi、HTTPS/TLS 或 MiMo 真机验收；本次构建不需要 MiMo API key。
 
-**明日第一步**：`nohup bash /home/hfy/work/build_run.sh &`（内容：`OPENVELA_ROOT=~/work/openvela-clean-20260830 JOBS=2 ./scripts/build.sh deploy && build`；日志 `~/work/clean-build-entry.log` 与 `logs/homemind/build.log`；预计 40–60 分钟）。
-**随后**：① 比对干净区产物 SHA-256 与官方仓 `artifacts/SHA256SUMS`（`418044b0…`/`439c0006…`）及 STATUS 最新烧录哈希（`ee22ee60…`），把三者关系写入本文件；② 一致则 M0"从干净目录完成一次构建"复选框可勾选；③ 推送 contest-final 至 GitHub 远端（需用户确认）。
+**下一步**：① 如需真机验收，使用本次构建产物烧录后记录串口结果；② 继续补齐 Wi-Fi/DHCP、HTTPS/TLS、MiMo 和持久化验收；③ 推送 `contest-final` 至 GitHub 远端前仍需用户确认。
 
 **访问方式**：`python transfer/sshx.py <cmd文件> [超时秒]`，需先设置 `HOMEMIND_SSH_PASSWORD` 环境变量（密码不落盘）。已知坑：paramiko 通道静默超时会掐断长命令，长任务一律 `nohup … & echo PID` 后轮询日志；`pgrep -f` 会自匹配，结束判断看日志标记（STAGE-DONE / BUILD-ENTRY-DONE / EXTRAS-DONE）。
 
