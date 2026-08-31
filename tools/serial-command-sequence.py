@@ -9,6 +9,9 @@ import time
 import serial
 
 
+PROMPT_RE = re.compile(rb"(?:^|[\r\n])(?:nsh|vela)>[ \t]*(?:\r|\n|$)")
+
+
 def read_for(port: serial.Serial, seconds: float) -> bytes:
     deadline = time.monotonic() + seconds
     data = bytearray()
@@ -25,7 +28,11 @@ def read_until_prompt(port: serial.Serial, timeout: float) -> bytes:
         chunk = port.read(4096)
         if chunk:
             data.extend(chunk)
-            if b"nsh>" in data or b"vela>" in data:
+            # The terminal echoes the submitted command as `vela> command`.
+            # Only accept a prompt that ends a line, otherwise a long-running
+            # command such as net_test can be reported as complete early.
+            clean = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", bytes(data))
+            if PROMPT_RE.search(clean):
                 return bytes(data)
     return bytes(data)
 
