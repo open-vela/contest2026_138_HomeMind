@@ -163,6 +163,59 @@ static size_t decode_chunked(char* buf, size_t len)
     return (size_t)(dst - buf);
 }
 
+/* Return 1 only after the complete chunked body, including the final
+ * trailer terminator, is present in buf.  A keep-alive response has no EOF
+ * to delimit its body, so waiting for the peer to close would otherwise
+ * leave the reader spinning on WANT_READ until the socket timeout. */
+static int chunked_body_complete(const char* buf, size_t len)
+{
+    const char* src = buf;
+    const char* end = buf + len;
+
+    while (src < end) {
+        const char* crlf = (const char*)memmem(
+            src, (size_t)(end - src), "\r\n", 2);
+        if (!crlf)
+            return 0;
+
+        const char* size_end = crlf;
+        const char* extension = (const char*)memchr(
+            src, ';', (size_t)(crlf - src));
+        if (extension)
+            size_end = extension;
+
+        char* endptr;
+        long chunk_sz = strtol(src, &endptr, 16);
+        while (endptr < size_end
+            && (*endptr == ' ' || *endptr == '\t')) {
+            endptr++;
+        }
+        if (endptr != size_end || chunk_sz < 0)
+            return -1;
+
+        src = crlf + 2;
+        if (chunk_sz == 0) {
+            /* No trailers: the empty trailer section is just CRLF. */
+            if ((size_t)(end - src) >= 2
+                && src[0] == '\r' && src[1] == '\n') {
+                return 1;
+            }
+            /* With trailers, the section ends at an additional CRLF. */
+            return memmem(src, (size_t)(end - src), "\r\n\r\n", 4)
+                ? 1 : 0;
+        }
+
+        if ((size_t)(end - src) < (size_t)chunk_sz + 2)
+            return 0;
+        src += chunk_sz;
+        if (src[0] != '\r' || src[1] != '\n')
+            return -1;
+        src += 2;
+    }
+
+    return 0;
+}
+
 /* ── TLS context ─────────────────────────────────────────────── */
 
 typedef struct {
@@ -861,7 +914,10 @@ static int tls_write_request(tls_ctx_t* ctx,
 
     HDR_APPEND("%s %s HTTP/1.1\r\n", method, path);
     HDR_APPEND("Host: %s\r\n", host);
-    HDR_APPEND("Connection: keep-alive\r\n");
+    /* LLM responses are frequently chunked.  Closing each HTTP/TLS
+     * exchange avoids reusing a stale NuttX socket while also giving
+     * responses without Content-Length a reliable EOF delimiter. */
+    HDR_APPEND("Connection: close\r\n");
     HDR_APPEND("User-Agent: agent-vela/1.0\r\n");
 
     if (body && body_len > 0) {
@@ -1049,22 +1105,67 @@ static int tls_read_response(tls_ctx_t* ctx, char* resp_buf, size_t resp_cap,
     memcpy(resp_buf, body_start, copy);
     resp_pos = copy;
 
-    /* Keep reading body */
-    if (!eof) {
-        while (resp_pos < resp_cap - 1) {
-            if (content_length >= 0 && (long)resp_pos >= content_length)
-                break;
+    /* Keep reading body.  For chunked responses, stop at the terminating
+     * zero-size chunk instead of waiting for EOF on a keep-alive socket. */
+    int body_complete = false;
+    if (http_status == 204 || http_status == 304
+        || (http_status >= 100 && http_status < 200)) {
+        body_complete = true;
+    } else if (content_length >= 0) {
+        body_complete = (resp_pos >= (size_t)content_length);
+    } else if (chunked) {
+        int chunk_state = chunked_body_complete(resp_buf, resp_pos);
+        if (chunk_state < 0) {
+            syslog(LOG_ERR, "[%s] malformed chunked response\n", TAG);
+            tls_raw_release(raw);
+            return VELA_TLS_ERR_READ;
+        }
+        body_complete = (chunk_state > 0);
+    }
+
+    if (!eof && !body_complete) {
+        while (resp_pos < resp_cap - 1 && !body_complete) {
             ret = mbedtls_ssl_read(&ctx->ssl,
                 (unsigned char*)(resp_buf + resp_pos),
                 resp_cap - 1 - resp_pos);
             if (ret > 0) {
                 resp_pos += (size_t)ret;
-            } else if (ret == 0 || ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
-                break;
-            } else if (ret != MBEDTLS_ERR_SSL_WANT_READ) {
-                break;
+                if (content_length >= 0) {
+                    body_complete = (resp_pos >= (size_t)content_length);
+                } else if (chunked) {
+                    int chunk_state = chunked_body_complete(
+                        resp_buf, resp_pos);
+                    if (chunk_state < 0) {
+                        syslog(LOG_ERR,
+                            "[%s] malformed chunked response\n", TAG);
+                        tls_raw_release(raw);
+                        return VELA_TLS_ERR_READ;
+                    }
+                    body_complete = (chunk_state > 0);
+                }
+            } else if (ret == 0
+                || ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
+                eof = 1;
+            } else if (ret == MBEDTLS_ERR_SSL_WANT_READ) {
+                /* A body that is not framed yet is incomplete, not a
+                 * successful HTTP response.  Let the caller close it so
+                 * the next request starts with a fresh connection. */
+                syslog(LOG_WARNING,
+                    "[%s] response body read timed out before framing completed\n",
+                    TAG);
+                tls_raw_release(raw);
+                return VELA_TLS_ERR_READ;
+            } else {
+                tls_raw_release(raw);
+                return VELA_TLS_ERR_READ;
             }
         }
+    }
+
+    if (!body_complete && !eof && resp_pos >= resp_cap - 1) {
+        syslog(LOG_ERR, "[%s] response body exceeds buffer\n", TAG);
+        tls_raw_release(raw);
+        return VELA_TLS_ERR_OVERFLOW;
     }
 
     resp_buf[resp_pos] = '\0';
