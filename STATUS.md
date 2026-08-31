@@ -1,6 +1,6 @@
 # HomeMind 当前状态
 
-> 整理时间：2026-08-23（当前事实截止 2026-08-23）  
+> 整理时间：2026-08-31（当前事实截止 2026-08-31）
 > 目标：ESP32-S3-EYE 独立运行 OpenVela/ai_agent，自动联网，直接调用 MiMo，并安全执行最小本地工具。
 
 ## 2026-08-30 M0 合规收口（本提交）
@@ -31,7 +31,7 @@
 
 ## 总体判断
 
-Ubuntu 主机、OpenVela 工作区、固定依赖、串口权限和服务器地址 `192.168.31.251` 均已验证可用。官方 ai_agent 基线与 HomeMind 固件可重复构建、烧录和校验。DIO 镜像封装、Wi-Fi 互斥锁死锁、同名 SSID 的最强 BSSID 选择、关联时序和 DHCP UDP 资源池问题均已处理；当前固件可锁定强 AP `50:88:11:7a:02:69`，达到 `ESSID_ON`、72 Mbps，并连续两次从冷启动流程通过 DHCP 获得 `192.168.31.249`。P0 已从 DHCP 推进到 HTTPS/TLS：`net_test` 开始访问后未在 70 秒内返回，TLS 和 MiMo 尚未验收。
+Ubuntu 主机、OpenVela 工作区、固定依赖、串口权限和服务器地址 `192.168.31.251` 均已验证可用。2026-08-31 的干净构建已烧录到 ESP32-S3-EYE：设备锁定强 AP `50:88:11:7a:02:69`，通过 DHCP 获得 `192.168.31.248`；`net_test www.baidu.com 443` 已完成 TLS 1.2 握手并返回 HTTP 200，重启后保存的 Wi-Fi 凭据也能自动恢复联网。MiMo 真实 `ask` 仍待 API key 和新固件上的一次验收。
 
 ## 2026-08-30 续接（小程序 BOM 修复；LCD 状态图标显示上线；C1.0 计划交付）
 
@@ -396,15 +396,13 @@ ST7789 240x240 屏此前完全空白(LVGL 未启用,qrcode 是死代码)。新�
 28. 验证入口明确：`nsh>` 下执行 `ai_agent` 进入 `vela>` 控制台；`set_wifi <ssid> <pw>` 关联、`net_test [host] [port]` 触发 TLS、`ask <text>` 调 MiMo；Wi-Fi 凭据在 TMPFS，每次重启/烧录后需重新 `set_wifi`；
 29. Windows 侧自动化文件集中在本地私有工作目录：SSH 凭据必须通过环境变量或密钥提供，不得写入参赛仓；串口会话脚本通过 RTS 硬复位后执行交互验收。
 
-## 下一主问题：HTTPS/TLS 与 Wi-Fi 连续性验收
+## 下一主问题：MiMo 问答与连续性回归
 
 当前剩余风险：
 
-1. agent 内 DHCP 仍不稳定；NSH 先 DHCP、后启动 agent 的顺序可稳定联网，但不是最终自动联网方案；
-2. 当前以固定 2 秒进入 DHCP；关联判定仍应改为基于 ESSID flag、BSSID、速率或信号的真实状态；
-3. `wapi show` 在成功打印关联信息后仍返回 -1，需要定位是哪一个非关键查询失败并避免误报；
-4. 当前 `/data` 是 TMPFS，Wi-Fi 凭据重启后会丢失，不能算自动联网完成；
-5. DNS 和 TCP 已验证，当前阻塞点是 TLS ClientHello/ServerHello 数据路径及约 90 秒的阻塞式握手超时。
+1. 新干净构建已完成一轮 `set_wifi`、DHCP、TLS/HTTP 和重启后 Wi-Fi 持久化验收；冷启动 5/5、断网恢复 3/3 以及 LLM 配置持久化仍需补齐；
+2. MiMo 真实非流式 `ask` 尚未在本次新构建上验收，需要 API key；
+3. 本次新构建上的 LED 本地工具和更长时间稳定性尚未重新回归。
 
 ## 尚未完成
 
@@ -412,12 +410,12 @@ ST7789 240x240 屏此前完全空白(LVGL 未启用,qrcode 是死代码)。新�
 | --- | --- | --- |
 | 官方 ai_agent 基线构建 | 已通过 | 固定版本在恢复后的 Ubuntu 工作区成功构建并保存哈希 |
 | HomeMind 构建/烧录 | 已通过基础门禁 | DIO 产物哈希通过，新固件稳定启动且 PSK 日志脱敏 |
-| Wi-Fi 关联与 DHCP | 根因已定位（argv 缺 `"renew"`），staging 已修复，**待端到端验证** | 烧录后 `set_wifi` + 自动 DHCP 拿到 IP，补足冷启动 5/5、断网恢复 3/3 |
-| HTTPS/TLS | 熵源修复生效（psa_init 通过），net_test 曾卡 ENETUNREACH（DHCP 层），DHCP 修复待验证 | `net_test` 出现 `[HM-TLS] Handshake OK` + `HTTP Status` |
+| Wi-Fi 关联与 DHCP | 单轮 `set_wifi` + 自动 DHCP 通过；重启后凭据自动恢复通过；5/5、断网恢复 3/3 待补 | 烧录后连续性回归 |
+| HTTPS/TLS | 已通过：`www.baidu.com:443` 两次完整 TLS 1.2 + HTTP 200 | `net_test` 出现 `[HM-TLS] Handshake OK` + `HTTP Status` |
 | MiMo 文本问答 | 未验收 | 一次真实非流式 `ask` 成功 |
-| Flash 持久化 | 仅方案 | 断电后 Wi-Fi/LLM 配置保留 |
+| Flash 持久化 | Wi-Fi 凭据重启后自动恢复已通过；LLM 配置待 key 后验证 | 断电/重启后 Wi-Fi/LLM 配置保留 |
 | HomeMind 本地工具 | 仅源码草案 | 工具进入 ELF、注册并控制确认过的 LED |
-| 自动测试和真实日志 | 缺失 | 构建、串口、重启和异常测试记录齐全 |
+| 自动测试和真实日志 | 本轮构建、刷写、串口、网络和重启记录已保存；长稳/异常回归待补 | 构建、串口、重启和异常测试记录齐全 |
 
 ## 开发环境
 
