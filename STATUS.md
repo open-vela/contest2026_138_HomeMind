@@ -23,9 +23,11 @@
 - **第三方离线依赖补齐**：目录同步遗漏了 `apps/crypto/mbedtls/v3.4.0.zip` 与 `apps/netutils/cjson/v1.7.12.tar.gz` 两个根目录归档；已从旧区复制到干净区并完成 SHA-256 校验。首次重跑因此失败；随后将两个残留解包目录按时间戳移出并保留备份，再从归档重新解包。
 - **干净构建已完成**：在 `/home/hfy/work/openvela-clean-20260830` 使用 `OPENVELA_ROOT=~/work/openvela-clean-20260830 JOBS=2 ./scripts/build.sh deploy` 后执行 `build`，日志标记 `BUILD-OK` / `BUILD-ENTRY-DONE`。最终产物：BIN `902ccdaa2109d8a2b1ecc8d5247b58d4788078eb4689e7390ee4124ec115ef56`，ELF `c10e1e64bee0f989accd4dacf6fae6ce8327ead8d386aeda7b87835ab9fd8e87`。
 - **哈希关系**：新干净构建与官方仓此前产物 `418044b0…` / `439c0006…`、STATUS 中历史烧录固件 `ee22ee60…` 均不一致；因此旧哈希视为历史构建/烧录记录，不能冒充本次干净构建。官方仓本地 `artifacts/` 已更新为本次构建结果并自校验一致。
-- **当前边界**：本次只完成构建和产物回收，尚未将 `902ccdaa…` 固件烧录到 ESP32-S3，也未进行 Wi-Fi、HTTPS/TLS 或 MiMo 真机验收；本次构建不需要 MiMo API key。
+- **MiMo 真机验收已完成**：用户提供的 key 仅通过远端临时串口命令写入设备；`config_show` 只显示 `sk-c****`，配置为 `mimo-v2.5` / `api.xiaomimimo.com`。一次真实 `ask` 完成 TLS 1.2（约 580 ms）、HTTP 200，并返回唯一短语 `homemind-mimo-ok`。
+- **重启持久化已完成**：硬复位后等待网络稳定，`net_status` 仍为 `192.168.31.248`，`config_show` 仍显示 MiMo 配置；未重新输入 key 的 `ask` 完成 TLS 1.2、HTTP 200，并返回 `homemind-mimo-restart-ok`。
+- **当前边界**：完整 key 未写入仓库、状态文档或日志；冷启动 5/5、断网恢复 3/3、长时间稳定性和本地工具回归仍待补齐。推送 `contest-final` 仍需用户确认。
 
-**下一步**：① 如需真机验收，使用本次构建产物烧录后记录串口结果；② 继续补齐 Wi-Fi/DHCP、HTTPS/TLS、MiMo 和持久化验收；③ 推送 `contest-final` 至 GitHub 远端前仍需用户确认。
+**下一步**：① 补齐冷启动 5/5、断网恢复 3/3 和长稳回归；② 继续验证本地 LED 工具及异常路径；③ 推送 `contest-final` 至 GitHub 远端前仍需用户确认。
 
 **访问方式**：`python transfer/sshx.py <cmd文件> [超时秒]`，需先设置 `HOMEMIND_SSH_PASSWORD` 环境变量（密码不落盘）。已知坑：paramiko 通道静默超时会掐断长命令，长任务一律 `nohup … & echo PID` 后轮询日志；`pgrep -f` 会自匹配，结束判断看日志标记（STAGE-DONE / BUILD-ENTRY-DONE / EXTRAS-DONE）。
 
@@ -396,13 +398,13 @@ ST7789 240x240 屏此前完全空白(LVGL 未启用,qrcode 是死代码)。新�
 28. 验证入口明确：`nsh>` 下执行 `ai_agent` 进入 `vela>` 控制台；`set_wifi <ssid> <pw>` 关联、`net_test [host] [port]` 触发 TLS、`ask <text>` 调 MiMo；Wi-Fi 凭据在 TMPFS，每次重启/烧录后需重新 `set_wifi`；
 29. Windows 侧自动化文件集中在本地私有工作目录：SSH 凭据必须通过环境变量或密钥提供，不得写入参赛仓；串口会话脚本通过 RTS 硬复位后执行交互验收。
 
-## 下一主问题：MiMo 问答与连续性回归
+## 下一主问题：连续性与异常路径回归
 
 当前剩余风险：
 
-1. 新干净构建已完成一轮 `set_wifi`、DHCP、TLS/HTTP 和重启后 Wi-Fi 持久化验收；冷启动 5/5、断网恢复 3/3 以及 LLM 配置持久化仍需补齐；
-2. MiMo 真实非流式 `ask` 尚未在本次新构建上验收，需要 API key；
-3. 本次新构建上的 LED 本地工具和更长时间稳定性尚未重新回归。
+1. 新干净构建已完成 `set_wifi`、DHCP、TLS/HTTP、MiMo 非流式 `ask` 和重启后 Wi-Fi/LLM 配置持久化验收；冷启动 5/5、断网恢复 3/3 仍需补齐；
+2. 本次新构建上的 LED 本地工具、更长时间稳定性和异常恢复尚未重新回归；
+3. 设备 Flash 中已保存用户提供的 MiMo key，提交物和日志不含完整 key；后续应按需要轮换设备侧凭据。
 
 ## 尚未完成
 
@@ -412,8 +414,8 @@ ST7789 240x240 屏此前完全空白(LVGL 未启用,qrcode 是死代码)。新�
 | HomeMind 构建/烧录 | 已通过基础门禁 | DIO 产物哈希通过，新固件稳定启动且 PSK 日志脱敏 |
 | Wi-Fi 关联与 DHCP | 单轮 `set_wifi` + 自动 DHCP 通过；重启后凭据自动恢复通过；5/5、断网恢复 3/3 待补 | 烧录后连续性回归 |
 | HTTPS/TLS | 已通过：`www.baidu.com:443` 两次完整 TLS 1.2 + HTTP 200 | `net_test` 出现 `[HM-TLS] Handshake OK` + `HTTP Status` |
-| MiMo 文本问答 | 未验收 | 一次真实非流式 `ask` 成功 |
-| Flash 持久化 | Wi-Fi 凭据重启后自动恢复已通过；LLM 配置待 key 后验证 | 断电/重启后 Wi-Fi/LLM 配置保留 |
+| MiMo 文本问答 | 已通过：首次配置和重启后各一次真实非流式 `ask`，均 HTTP 200 | 一次真实非流式 `ask` 成功 |
+| Flash 持久化 | Wi-Fi 与 LLM 配置在硬复位后均恢复，重启后 `ask` 通过 | 断电/重启后 Wi-Fi/LLM 配置保留 |
 | HomeMind 本地工具 | 仅源码草案 | 工具进入 ELF、注册并控制确认过的 LED |
 | 自动测试和真实日志 | 本轮构建、刷写、串口、网络和重启记录已保存；长稳/异常回归待补 | 构建、串口、重启和异常测试记录齐全 |
 
