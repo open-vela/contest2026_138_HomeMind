@@ -343,6 +343,15 @@ static int tls_net_recv_trace(void* context, unsigned char* buf, size_t len)
 static void tls_ctx_free(tls_ctx_t* ctx)
 {
     mbedtls_ssl_close_notify(&ctx->ssl);
+    /* This device preallocates only eight TCP connection records and keeps
+     * actively-closed peers in TIME_WAIT for 120 seconds.  Abort the final
+     * socket close so stale pooled connections do not consume the whole
+     * connection pool during repeated LLM requests. */
+    if (ctx->net.fd >= 0) {
+        struct linger abortive = { .l_onoff = 1, .l_linger = 0 };
+        setsockopt(ctx->net.fd, SOL_SOCKET, SO_LINGER,
+            &abortive, sizeof(abortive));
+    }
     mbedtls_net_free(&ctx->net);
     mbedtls_ssl_free(&ctx->ssl);
     mbedtls_ssl_config_free(&ctx->cfg);
@@ -887,6 +896,15 @@ static int tls_ctx_connect(tls_ctx_t* ctx, const char* host, const char* port)
 
 /* ── HTTP/1.1 framing ────────────────────────────────────────── */
 
+#define TLS_WRITE_TIMEOUT_SEC 15
+
+static bool tls_write_deadline_expired(const struct timespec* start)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (now.tv_sec - start->tv_sec) >= TLS_WRITE_TIMEOUT_SEC;
+}
+
 static int tls_write_request(tls_ctx_t* ctx,
     const char* method, const char* host,
     const char* path,
@@ -904,6 +922,8 @@ static int tls_write_request(tls_ctx_t* ctx,
 
     int pos = 0;
     int ret;
+    struct timespec write_start;
+    clock_gettime(CLOCK_MONOTONIC, &write_start);
 
 #define HDR_APPEND(fmt, ...)                                    \
     pos += snprintf(hdr + pos, 4096 - pos, fmt, ##__VA_ARGS__); \
@@ -914,9 +934,10 @@ static int tls_write_request(tls_ctx_t* ctx,
 
     HDR_APPEND("%s %s HTTP/1.1\r\n", method, path);
     HDR_APPEND("Host: %s\r\n", host);
-    /* LLM responses are frequently chunked.  Closing each HTTP/TLS
-     * exchange avoids reusing a stale NuttX socket while also giving
-     * responses without Content-Length a reliable EOF delimiter. */
+    /* The remote endpoint may advertise keep-alive and then close an idle
+     * pooled socket.  Closing each exchange avoids stale-socket writes; the
+     * abortive close in tls_ctx_free() prevents those closes exhausting the
+     * board's small TCP connection pool. */
     HDR_APPEND("Connection: close\r\n");
     HDR_APPEND("User-Agent: agent-vela/1.0\r\n");
 
@@ -947,7 +968,14 @@ static int tls_write_request(tls_ctx_t* ctx,
         } else if (ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
             free(hdr);
             return VELA_TLS_ERR_WRITE;
+        } else if (tls_write_deadline_expired(&write_start)) {
+            syslog(LOG_ERR,
+                "[%s] HTTP header write timed out after %ds\n",
+                TAG, TLS_WRITE_TIMEOUT_SEC);
+            free(hdr);
+            return VELA_TLS_ERR_WRITE;
         }
+        usleep(10000);
     }
 
     free(hdr);
@@ -965,7 +993,13 @@ static int tls_write_request(tls_ctx_t* ctx,
                 return VELA_TLS_ERR_WRITE;
             } else if (ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
                 return VELA_TLS_ERR_WRITE;
+            } else if (tls_write_deadline_expired(&write_start)) {
+                syslog(LOG_ERR,
+                    "[%s] HTTP body write timed out after %ds\n",
+                    TAG, TLS_WRITE_TIMEOUT_SEC);
+                return VELA_TLS_ERR_WRITE;
             }
+            usleep(10000);
         }
     }
 

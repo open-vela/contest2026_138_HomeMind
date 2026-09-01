@@ -1,0 +1,12 @@
+STABILITY-OK-BOOT PASS ip=192.168.31.248
+STABILITY-OK 1 PASS before_ip=192.168.31.248 http200=True agent_count=2 final_ip=192.168.31.248
+STABILITY-OK 2 PASS before_ip=192.168.31.248 http200=True agent_count=2 final_ip=192.168.31.248
+STABILITY-OK 3 PASS before_ip=192.168.31.248 http200=True agent_count=2 final_ip=192.168.31.248
+STABILITY-OK 4 PASS before_ip=192.168.31.248 http200=True agent_count=2 final_ip=192.168.31.248
+STABILITY-OK 5 PASS before_ip=192.168.31.248 http200=True agent_count=2 final_ip=192.168.31.248
+STABILITY-OK 6 PASS before_ip=192.168.31.248 http200=True agent_count=2 final_ip=192.168.31.248
+STABILITY-OK 7 PASS before_ip=192.168.31.248 http200=True agent_count=2 final_ip=192.168.31.248
+STABILITY-OK 8 PASS before_ip=192.168.31.248 http200=True agent_count=2 final_ip=192.168.31.248
+STABILITY-OK 9 PASS before_ip=192.168.31.248 http200=True agent_count=2 final_ip=192.168.31.248
+STABILITY-OK 10 PASS before_ip=192.168.31.248 http200=True agent_count=2 final_ip=192.168.31.248
+STABILITY-OK-DONE pass=10 fail=0
