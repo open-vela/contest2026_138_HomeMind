@@ -1,0 +1,4 @@
+RECONNECT 1 PASS initial_ip=192.168.31.248 reconnect=True internal_ifdown=True recovered=True http200=True agent=True final_ip=192.168.31.248
+RECONNECT 2 PASS initial_ip=192.168.31.248 reconnect=True internal_ifdown=True recovered=True http200=True agent=True final_ip=192.168.31.248
+RECONNECT 3 PASS initial_ip=192.168.31.248 reconnect=True internal_ifdown=True recovered=True http200=True agent=True final_ip=192.168.31.248
+RECONNECT-DONE pass=3 fail=0

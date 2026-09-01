@@ -1,0 +1,5 @@
+RESUME-BOOT PASS ip=192.168.31.248
+RESUME 1 FAIL before_ip=192.168.31.248 http200=False agent=True final_ip=192.168.31.248
+RESUME 2 FAIL before_ip=192.168.31.248 http200=False agent=True final_ip=192.168.31.248
+RESUME 3 FAIL before_ip=192.168.31.248 http200=False agent=True final_ip=192.168.31.248
+RESUME-DONE pass=0 fail=3
