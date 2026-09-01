@@ -3,6 +3,17 @@
 > 整理时间：2026-09-01（当前事实截止 2026-09-01）
 > 目标：ESP32-S3-EYE 独立运行 OpenVela/ai_agent，自动联网，直接调用 MiMo，并安全执行最小本地工具。
 
+## 2026-09-02 Skill runtime follow-up（本地完成，未推送）
+
+- **Skill 源文件**：将 `app/homemind/skills/home_security.md` 收口为 ai_agent 当前实现使用的平铺 `.md` 格式，并增加只调用现有白名单工具的单次 15 秒主动演示定义；`tools/validate-home-security-skill.py` 静态检查通过，文件 3185 字节、低于设备安装缓冲区限制。
+- **真实缺陷修复**：修正 `install_skill` 对 HTTPS URL 的解析，使其拆分为 host、port、path 后再调用 TLS；此前完整 `https://...` 字符串会被错误传给 `getaddrinfo()`。
+- **新固件**：干净构建、SHA 校验和烧录均通过；BIN `aa24d37cb4edfa698fa1d4bdbbcfcfe956acbb63bab1905c9502291d5f0d4629`，ELF `9779806b21c3b60938652cc6faa387d395a1ed288f02a2fcd83b95d797c7e119`，esptool v5.3.1 `Hash of data verified`。
+- **设备加载证据**：设备实际技能目录为 `/data/ai_agent/skills/`；`ask list skills` 出现 `Home Security Skill`，证明自定义 `.md` 已被 loader 发现。
+- **主动执行证据**：一次启动请求创建了 cron 任务并产生了板载 LED 主动动作；随后停止请求确认“无运行中的任务、LED 已关闭”。但设备文件实际仍被回读为“每 15 秒 toggle”的循环版本，未达到仓库定义的“15 秒后单次执行”，因此本项只记为“加载/调用通过，最终 Skill 规范未通过”。
+- **安装通道限制**：临时 HTTPS 安装曾到达设备 TLS 连接阶段，但设备到家庭 Ubuntu `192.168.31.251` 的同网段访问返回 `errno=101`，服务端无请求；本次设备文件由设备内置 `write_file` 生成，不能作为仓库源文件原文安装证据。
+- **清理**：循环 cron 已清除；临时 HTTPS 服务、证书和 staging 文件已删除；家庭 `gateway_agent.py` 已恢复运行。完整过程见 `logs/hardware-2026-09-02-skill-runtime.log`。
+- **推送状态**：本地 `contest-final` 仍未执行远程 push；本节不宣称大赛 P0 全部完成。
+
 ## 2026-09-01 最终长稳回归（本地已完成，未推送）
 
 - **最终修复组合**：HTTP chunked body 识别终止块；未完成/超长 body 返回读取错误；请求使用 `Connection: close` 避免复用服务端主动关闭的 stale TLS socket；TLS header/body 写入增加 15 秒总超时；释放 socket 前设置 `SO_LINGER=0`。
@@ -14,7 +25,7 @@
 - **中间方案对照**：仅保持 `keep-alive` 的版本在第 4 轮复现 stale pooled socket 路径；最终主动关闭方案在同一 10 轮门禁中 10/10 通过。
 - **安全与推送**：完整 MiMo key、Wi-Fi 密码和 SSH 密码未写入仓库、文档或日志；本地提交已完成，远程 push 仍未执行。
 
-**当前结论**：设备端固件、干净构建、烧录和 10 轮长稳回归均已收口；后续只剩用户明确要求时再执行远程推送。
+**当前结论**：设备端固件、干净构建、烧录和 10 轮长稳回归均已收口；本轮 `install_skill` URL 解析修复也已构建烧录并通过静态/运行时探测。自定义 Skill 已被设备发现并执行过主动 cron，但设备端实际内容仍与仓库规定的一次性合同不一致，因此大赛 Skill/主动场景 P0 尚未关闭；远程 push 仍未执行。
 
 ## 2026-09-01 暂停点（TLS body framing 修复后）
 

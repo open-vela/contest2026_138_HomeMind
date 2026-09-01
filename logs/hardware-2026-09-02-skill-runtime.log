@@ -1,0 +1,39 @@
+HomeMind hardware evidence: Skill runtime follow-up
+Date: 2026-09-02 Asia/Shanghai
+Remote host: local Ubuntu build/serial host (credentials omitted)
+Serial port: /dev/ttyACM0
+
+[build]
+clean build: PASS
+bin_sha256: aa24d37cb4edfa698fa1d4bdbbcfcfe956acbb63bab1905c9502291d5f0d4629
+elf_sha256: 9779806b21c3b60938652cc6faa387d395a1ed288f02a2fcd83b95d797c7e119
+flash: PASS (esptool v5.3.1, Hash of data verified)
+
+[static-skill-check]
+command: python tools/validate-home-security-skill.py
+result: SKILL-VALID
+bytes: 3185
+loader: flat-md
+declared_tools: get_current_time,cron_add,led_control,get_device_info
+declared_active_demo: single-run-after-15-seconds
+
+[device-discovery]
+runtime_skill_dir: /data/ai_agent/skills/
+command: ask list skills
+result: PASS — Home Security Skill appeared in the loader summary
+
+[device-active-test]
+first test: the device-created Skill scheduled a 15-second LED action and returned task id 7c9701b3
+observed: an active LED notification was emitted without a second user command
+observed: the device response described the task as repeating every 15 seconds
+cleanup: PASS — stop request reported no running task and LED off
+final_status: NOT_ACCEPTED_AS_FINAL — device file behavior did not match the checked-in one-shot contract
+
+[install-channel]
+attempt: temporary LAN HTTPS staging server on Ubuntu
+result: device connect to 192.168.31.251:18080 returned errno=101; server received no request
+note: temporary HTTPS process, certificate and staging files were removed after the test
+
+[repository]
+remote_push: NOT RUN
+secrets: omitted
