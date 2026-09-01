@@ -895,6 +895,94 @@ static void cmd_mcp_tools(void)
 
 /* ── install_skill: install a skill from URL ──────────────── */
 
+/* vela_https_get() takes host, port and path separately.  Keep URL parsing
+ * here so the public install_skill command cannot accidentally pass the
+ * literal "https://..." prefix to getaddrinfo().  Only https URLs are
+ * accepted; credentials and non-numeric ports are rejected. */
+static int parse_https_url(const char* url,
+                           char* host, size_t host_size,
+                           char* port, size_t port_size,
+                           char* path, size_t path_size)
+{
+    const char* prefix = "https://";
+    const size_t prefix_len = 8;
+    const char* authority;
+    const char* end;
+    const char* colon = NULL;
+    size_t host_len;
+    size_t port_len;
+    size_t path_len;
+
+    if (!url || strncmp(url, prefix, prefix_len) != 0) {
+        return ERROR;
+    }
+
+    authority = url + prefix_len;
+    end = strchr(authority, '/');
+    if (!end) {
+        end = authority + strlen(authority);
+    }
+    if (end == authority) {
+        return ERROR;
+    }
+
+    for (const char* p = authority; p < end; p++) {
+        if (*p == ':') {
+            if (colon) {
+                /* IPv6 literals are intentionally unsupported here. */
+                return ERROR;
+            }
+            colon = p;
+        }
+        if (*p == '@') {
+            /* Do not allow userinfo in a skill URL. */
+            return ERROR;
+        }
+    }
+
+    host_len = colon ? (size_t)(colon - authority)
+                     : (size_t)(end - authority);
+    if (host_len == 0 || host_len >= host_size) {
+        return ERROR;
+    }
+    memcpy(host, authority, host_len);
+    host[host_len] = '\0';
+
+    if (colon) {
+        port_len = (size_t)(end - colon - 1);
+        if (port_len == 0 || port_len >= port_size) {
+            return ERROR;
+        }
+        for (size_t i = 0; i < port_len; i++) {
+            if (colon[1 + i] < '0' || colon[1 + i] > '9') {
+                return ERROR;
+            }
+        }
+        memcpy(port, colon + 1, port_len);
+        port[port_len] = '\0';
+    } else {
+        if (port_size < 4) {
+            return ERROR;
+        }
+        strcpy(port, "443");
+    }
+
+    if (*end == '\0') {
+        if (path_size < 2) {
+            return ERROR;
+        }
+        strcpy(path, "/");
+        return OK;
+    }
+
+    path_len = strlen(end);
+    if (path_len == 0 || path_len >= path_size) {
+        return ERROR;
+    }
+    memcpy(path, end, path_len + 1);
+    return OK;
+}
+
 static void cmd_install_skill(int argc, char** argv)
 {
     if (argc < 3) {
@@ -916,9 +1004,12 @@ static void cmd_install_skill(int argc, char** argv)
         }
     }
 
-    /* Validate URL starts with https:// */
-    if (strncmp(url, "https://", 8) != 0) {
-        printf("Only HTTPS URLs are allowed\n");
+    char host[128];
+    char port[8];
+    char path_url[512];
+    if (parse_https_url(url, host, sizeof(host), port, sizeof(port),
+            path_url, sizeof(path_url)) != OK) {
+        printf("Invalid HTTPS URL (host/path required; no credentials)\n");
         return;
     }
 
@@ -937,7 +1028,7 @@ static void cmd_install_skill(int argc, char** argv)
     }
 
     memset(buf, 0, 8192);
-    int rc = vela_https_get(url, "443", NULL, buf, 8192);
+    int rc = vela_https_get(host, port, path_url, buf, 8192);
     if (rc < 200 || rc >= 300) {
         printf("Download failed: HTTP %d\n", rc);
         free(buf);

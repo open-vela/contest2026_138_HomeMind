@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-08-30",
+  "captured_at": "2026-09-01",
   "source_root": "/home/hfy/work/openvela/packages/ai_agent",
   "files": [
     {
@@ -19,8 +19,8 @@
     },
     {
       "path": "src/channels/nsh_commands.c",
-      "sha256": "0e8e2f80c749cb64ca33af4d3e1bd9845fd376c90ab12d1a3f21c433a0b3f549",
-      "size": 40658
+      "sha256": "b1c5dadb8006a58df9652a835e473ef93b658f4f731c5db56a0667dcff3b64f6",
+      "size": 43199
     },
     {
       "path": "src/core/agent_loop.c",
