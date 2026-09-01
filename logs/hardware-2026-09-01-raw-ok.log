@@ -1,0 +1,14 @@
+RAW-OK-RESET rc=0
+RAW-OK-BOOT state=yes ip=192.168.31.248
+--- SESSION-LIST ---
+--- SESSION-CLEAR ---
+--- ASK ---
+[Agent]: 让我查一下...
+[HM-TLS] Handshake start: api.xiaomimimo.com
+[HM-TLS] Handshake OK: TLSv1.2, TLS-ECDHE-RSA-WITH-CHACHA20-POLY1305-SHA256 (550ms)
+[HM-NET] HTTP write start: POST /v1/chat/completions
+[HM-NET] HTTP write OK
+[HM-NET] HTTP read start
+[HM-NET] HTTP status: 200
+[Agent]: OK
+RAW-OK-FINAL state=yes ip=192.168.31.248
