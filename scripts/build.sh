@@ -86,6 +86,13 @@ apply_network_capacity_config() {
         --disable CONFIG_NET_TCP_DELAYED_ACK
     kconfig-tweak --file "$nuttx_config" \
         --enable CONFIG_NET_TCP_WRITE_BUFFERS
+    # The board has only eight preallocated TCP connection records and keeps
+    # actively-closed peers in TIME_WAIT for 120s.  HomeMind sets SO_LINGER=0
+    # before closing stale TLS sockets, so enable the NuttX implementation of
+    # that option and release the record immediately instead of exhausting
+    # the pool during repeated LLM requests.
+    kconfig-tweak --file "$nuttx_config" \
+        --enable CONFIG_NET_SOLINGER
     # TLS 1.3 relies on PSA crypto, which needs an entropy source. The NuttX
     # platform entropy poll calls getrandom(), which opens /dev/urandom; the
     # board image ships without it, so psa_crypto_init() fails. Enable the

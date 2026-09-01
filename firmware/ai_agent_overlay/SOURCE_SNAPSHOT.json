@@ -44,8 +44,8 @@
     },
     {
       "path": "src/infra/vela_tls.c",
-      "sha256": "a403fc3748b41f22d4d19c463440402c02f7a8ab29a9f7772b1ce85cc4b44c3c",
-      "size": 54845
+      "sha256": "68cf5f416673884473954b26eb22de0bbecbe947c3caa716d51ca47e94673090",
+      "size": 56283
     },
     {
       "path": "src/tools/tool_device.c",
