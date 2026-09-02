@@ -1,18 +1,20 @@
 # HomeMind 当前状态
 
-> 整理时间：2026-09-01（当前事实截止 2026-09-01）
+> 整理时间：2026-09-02（当前事实截止 2026-09-02）
 > 目标：ESP32-S3-EYE 独立运行 OpenVela/ai_agent，自动联网，直接调用 MiMo，并安全执行最小本地工具。
 
-## 2026-09-02 Skill runtime follow-up（本地完成，未推送）
+## 2026-09-02 Skill runtime completion（本地完成，未推送）
 
 - **Skill 源文件**：将 `app/homemind/skills/home_security.md` 收口为 ai_agent 当前实现使用的平铺 `.md` 格式，并增加只调用现有白名单工具的单次 15 秒主动演示定义；`tools/validate-home-security-skill.py` 静态检查通过，文件 3185 字节、低于设备安装缓冲区限制。
 - **真实缺陷修复**：修正 `install_skill` 对 HTTPS URL 的解析，使其拆分为 host、port、path 后再调用 TLS；此前完整 `https://...` 字符串会被错误传给 `getaddrinfo()`。
-- **新固件**：干净构建、SHA 校验和烧录均通过；BIN `aa24d37cb4edfa698fa1d4bdbbcfcfe956acbb63bab1905c9502291d5f0d4629`，ELF `9779806b21c3b60938652cc6faa387d395a1ed288f02a2fcd83b95d797c7e119`，esptool v5.3.1 `Hash of data verified`。
+- **新固件**：增加受限串口 Skill 导入命令后重新完成干净构建、SHA 校验和烧录；BIN `d045e2c79159152cec4f8e9f2772feeae29ad7284d7a8c8d08cb9e6c2ec8ff2e`，ELF `7c05f2c9f513d17fc67b48c7c5a87ba153f78b66cdf3be9e23773850a60cdd16`，esptool v5.3.1 `Hash of data verified`。
 - **设备加载证据**：设备实际技能目录为 `/data/ai_agent/skills/`；`ask list skills` 出现 `Home Security Skill`，证明自定义 `.md` 已被 loader 发现。
-- **主动执行证据**：一次启动请求创建了 cron 任务并产生了板载 LED 主动动作；随后停止请求确认“无运行中的任务、LED 已关闭”。但设备文件实际仍被回读为“每 15 秒 toggle”的循环版本，未达到仓库定义的“15 秒后单次执行”，因此本项只记为“加载/调用通过，最终 Skill 规范未通过”。
+- **原文安装证据**：为绕开同网段客户端隔离，固件新增 `skill_write_begin` / `skill_write_hex` / `skill_write_commit` 受限路径；将仓库 `home_security.md` 原文分块导入后，设备明确返回 `Skill committed: /data/ai_agent/skills/home_security.md (3185 bytes)`，与静态校验的源文件字节数一致。写入使用 `.part` 临时文件，最后才原子改名为 `.md`。
+- **主动执行证据**：在原文安装后，用户可见响应为“安防演示已启动”“15 秒后将自动闪烁提醒一次”“任务完成后会自动删除”；等待 25 秒后停止请求确认“定时任务：已清空、LED 灯：已关闭”。这次已按仓库定义接受为一次性主动场景；仍需提交视频和更完整的原始 Cron 行时，不能用本段文字替代。
+- **原始日志补充**：NuttX `dmesg` 已抓到本次固件启动、`/data/ai_agent` 存储、工具注册、10 个内置 Skill、网络 IP 和 Stop 清理记录；板端没有 `grep/tail`，未伪造 `Cron job firing` 等缺失行。完整串口过程见 `logs/hardware-2026-09-02-skill-runtime.log`。
 - **安装通道限制**：临时 HTTPS 安装曾到达设备 TLS 连接阶段，但设备到家庭 Ubuntu `192.168.31.251` 的同网段访问返回 `errno=101`，服务端无请求；本次设备文件由设备内置 `write_file` 生成，不能作为仓库源文件原文安装证据。
 - **清理**：循环 cron 已清除；临时 HTTPS 服务、证书和 staging 文件已删除；家庭 `gateway_agent.py` 已恢复运行。完整过程见 `logs/hardware-2026-09-02-skill-runtime.log`。
-- **推送状态**：本地 `contest-final` 仍未执行远程 push；本节不宣称大赛 P0 全部完成。
+- **推送状态**：本地 `contest-final` 仍未执行远程 push；Skill/主动场景本阶段已收口，但摄像头、离线唤醒、真实米家设备和最终小程序闭环仍未完成。
 
 ## 2026-09-01 最终长稳回归（本地已完成，未推送）
 
@@ -25,7 +27,7 @@
 - **中间方案对照**：仅保持 `keep-alive` 的版本在第 4 轮复现 stale pooled socket 路径；最终主动关闭方案在同一 10 轮门禁中 10/10 通过。
 - **安全与推送**：完整 MiMo key、Wi-Fi 密码和 SSH 密码未写入仓库、文档或日志；本地提交已完成，远程 push 仍未执行。
 
-**当前结论**：设备端固件、干净构建、烧录和 10 轮长稳回归均已收口；本轮 `install_skill` URL 解析修复也已构建烧录并通过静态/运行时探测。自定义 Skill 已被设备发现并执行过主动 cron，但设备端实际内容仍与仓库规定的一次性合同不一致，因此大赛 Skill/主动场景 P0 尚未关闭；远程 push 仍未执行。
+**当前结论**：设备端固件、干净构建、烧录、10 轮长稳回归、自定义 Skill 原文安装和一次性主动 LED 场景均已有本地证据；本阶段新增提交尚未推送。大赛整体仍不能宣称全部完成：摄像头端侧推理、离线唤醒、真实米家设备、MQTT 状态闭环、微信小程序真实联调以及最终视频/平台材料仍是边界项。
 
 ## 2026-09-01 暂停点（TLS body framing 修复后）
 

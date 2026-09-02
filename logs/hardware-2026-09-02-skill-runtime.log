@@ -37,3 +37,29 @@ note: temporary HTTPS process, certificate and staging files were removed after 
 [repository]
 remote_push: NOT RUN
 secrets: omitted
+
+[final-serial-import]
+firmware: d045e2c79159152cec4f8e9f2772feeae29ad7284d7a8c8d08cb9e6c2ec8ff2e
+serial_provisioning: PASS
+commands: skill_write_begin, skill_write_hex, skill_write_commit
+device_commit: Skill committed: /data/ai_agent/skills/home_security.md (3185 bytes)
+source_bytes: 3185
+transport: USB serial, bounded hex chunks; no LAN server dependency
+
+[final-active-demo]
+request: Start home security active demo now
+device_response: one-shot LED demo, execute once after 15 seconds, delete after completion
+wait_window_seconds: 25
+cleanup_request: Stop security
+cleanup_response: scheduled task cleared; LED off
+result: PASS for the checked-in one-shot contract
+
+[raw-dmesg]
+captured: board boot, /data/ai_agent storage, tool registry, skill loader, network IP,
+          CLI shutdown and task cleanup records
+not_claimed: no fabricated Cron job firing / Executing action lines; NuttX image did
+             not provide grep/tail for in-device filtering, and the captured raw window
+             did not contain those exact strings
+
+[repository-final]
+remote_push: NOT RUN
