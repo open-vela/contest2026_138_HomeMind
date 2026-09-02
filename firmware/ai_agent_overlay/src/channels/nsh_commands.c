@@ -66,6 +66,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
@@ -156,6 +157,9 @@ static void cmd_help(void)
         "  launch_app <pkg>     - Test launch a QuickApp by package name\n"
         "  exit_app             - Exit current QuickApp and go home\n"
         "  install_skill <name> <url|-> - Install skill from URL or stdin\n"
+        "  skill_write_begin <name> - Begin bounded serial Skill import\n"
+        "  skill_write_hex <name> <hex> - Append one Skill data chunk\n"
+        "  skill_write_commit <name> - Atomically activate imported Skill\n"
 #if AGENT_SKILL_SYNC_ENABLED
         "  skill_sync            - Sync skills from Feishu Bitable\n"
 #endif
@@ -893,6 +897,70 @@ static void cmd_mcp_tools(void)
 }
 #endif /* CONFIG_AI_AGENT_MCP */
 
+/* ── Skill file installation helpers ───────────────────────── */
+
+#define SKILL_NAME_MAX 48
+#define SKILL_IMPORT_MAX_BYTES 8191
+#define SKILL_IMPORT_HEX_MAX 192
+
+static char g_skill_import_name[SKILL_NAME_MAX];
+static size_t g_skill_import_size;
+static int g_skill_import_active;
+
+static int skill_name_valid(const char* name)
+{
+    size_t len;
+
+    if (!name || name[0] == '\0') {
+        return ERROR;
+    }
+
+    len = strlen(name);
+    if (len >= SKILL_NAME_MAX) {
+        return ERROR;
+    }
+
+    for (const char* p = name; *p; p++) {
+        if (!(*p >= 'a' && *p <= 'z') && !(*p >= '0' && *p <= '9')
+            && *p != '-' && *p != '_') {
+            return ERROR;
+        }
+    }
+
+    return OK;
+}
+
+static int skill_path(const char* name, const char* suffix,
+                      char* path, size_t path_size)
+{
+    int n;
+
+    if (skill_name_valid(name) != OK || !suffix || !path) {
+        return ERROR;
+    }
+
+    n = snprintf(path, path_size, "%s%s%s", AGENT_SKILLS_DIR, name,
+                 suffix);
+    if (n < 0 || (size_t)n >= path_size) {
+        return ERROR;
+    }
+    return OK;
+}
+
+static int skill_hex_value(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
 /* ── install_skill: install a skill from URL ──────────────── */
 
 /* vela_https_get() takes host, port and path separately.  Keep URL parsing
@@ -995,13 +1063,9 @@ static void cmd_install_skill(int argc, char** argv)
     const char* name = argv[1];
     const char* url = argv[2];
 
-    /* Validate name (lowercase + digits + hyphens) */
-    for (const char* p = name; *p; p++) {
-        if (!(*p >= 'a' && *p <= 'z') && !(*p >= '0' && *p <= '9')
-            && *p != '-' && *p != '_') {
-            printf("Invalid skill name: use a-z, 0-9, hyphens\n");
-            return;
-        }
+    if (skill_name_valid(name) != OK) {
+        printf("Invalid skill name: use a-z, 0-9, hyphens\n");
+        return;
     }
 
     char host[128];
@@ -1014,9 +1078,7 @@ static void cmd_install_skill(int argc, char** argv)
     }
 
     char path[128];
-    int n = snprintf(path, sizeof(path), "%s%s.md",
-        AGENT_SKILLS_DIR, name);
-    if (n < 0 || (size_t)n >= sizeof(path)) {
+    if (skill_path(name, ".md", path, sizeof(path)) != OK) {
         printf("Skill name too long\n");
         return;
     }
@@ -1071,6 +1133,150 @@ static void cmd_install_skill(int argc, char** argv)
     fclose(f);
     free(buf);
     printf("Skill installed: %s (%zu bytes)\n", path, content_len);
+}
+
+/*
+ * Offline provisioning path for boards whose Wi-Fi is client-isolated from
+ * the build host.  The only writable target is AGENT_SKILLS_DIR/<name>.part;
+ * skill_write_commit() renames it to .md after a small markdown sanity check.
+ * Chunks are hex-encoded so the NSH tokenizer never has to parse Skill text.
+ */
+static void cmd_skill_write_begin(int argc, char** argv)
+{
+    char path[128];
+    FILE* f;
+
+    if (argc != 2) {
+        printf("Usage: skill_write_begin <name>\n");
+        return;
+    }
+    if (skill_path(argv[1], ".part", path, sizeof(path)) != OK) {
+        printf("Invalid skill name\n");
+        return;
+    }
+
+    f = fopen(path, "w");
+    if (!f) {
+        printf("Cannot stage: %s\n", path);
+        return;
+    }
+    fclose(f);
+
+    strncpy(g_skill_import_name, argv[1], sizeof(g_skill_import_name) - 1);
+    g_skill_import_name[sizeof(g_skill_import_name) - 1] = '\0';
+    g_skill_import_size = 0;
+    g_skill_import_active = 1;
+    printf("Skill staging started: %s\n", path);
+}
+
+static void cmd_skill_write_hex(int argc, char** argv)
+{
+    char path[128];
+    unsigned char decoded[SKILL_IMPORT_HEX_MAX / 2];
+    const char* hex;
+    size_t hex_len;
+    size_t decoded_len;
+    FILE* f;
+
+    if (argc != 3) {
+        printf("Usage: skill_write_hex <name> <hex>\n");
+        return;
+    }
+    if (!g_skill_import_active || strcmp(argv[1], g_skill_import_name) != 0) {
+        printf("No matching Skill staging session\n");
+        return;
+    }
+    hex = argv[2];
+    hex_len = strlen(hex);
+    if (hex_len == 0 || hex_len > SKILL_IMPORT_HEX_MAX
+        || (hex_len & 1) != 0) {
+        printf("Invalid hex chunk (1..%d bytes)\n",
+               SKILL_IMPORT_HEX_MAX / 2);
+        return;
+    }
+    decoded_len = hex_len / 2;
+    if (g_skill_import_size + decoded_len > SKILL_IMPORT_MAX_BYTES) {
+        printf("Skill exceeds %d-byte limit\n", SKILL_IMPORT_MAX_BYTES);
+        return;
+    }
+
+    for (size_t i = 0; i < decoded_len; i++) {
+        int high = skill_hex_value(hex[i * 2]);
+        int low = skill_hex_value(hex[i * 2 + 1]);
+        if (high < 0 || low < 0) {
+            printf("Invalid hex chunk\n");
+            return;
+        }
+        decoded[i] = (unsigned char)((high << 4) | low);
+    }
+
+    if (skill_path(g_skill_import_name, ".part", path, sizeof(path)) != OK) {
+        printf("Invalid skill name\n");
+        return;
+    }
+    f = fopen(path, "ab");
+    if (!f) {
+        printf("Cannot append: %s\n", path);
+        return;
+    }
+    if (fwrite(decoded, 1, decoded_len, f) != decoded_len) {
+        fclose(f);
+        printf("Skill chunk write failed\n");
+        return;
+    }
+    fclose(f);
+    g_skill_import_size += decoded_len;
+    printf("Skill staging: %zu bytes\n", g_skill_import_size);
+}
+
+static void cmd_skill_write_commit(int argc, char** argv)
+{
+    char part_path[128];
+    char final_path[128];
+    FILE* f;
+    int first;
+    int second;
+
+    if (argc != 2) {
+        printf("Usage: skill_write_commit <name>\n");
+        return;
+    }
+    if (!g_skill_import_active || strcmp(argv[1], g_skill_import_name) != 0) {
+        printf("No matching Skill staging session\n");
+        return;
+    }
+    if (skill_path(argv[1], ".part", part_path, sizeof(part_path)) != OK
+        || skill_path(argv[1], ".md", final_path, sizeof(final_path)) != OK) {
+        printf("Invalid skill name\n");
+        return;
+    }
+    if (g_skill_import_size < 10) {
+        printf("Skill is too small (%zu bytes)\n", g_skill_import_size);
+        return;
+    }
+
+    f = fopen(part_path, "rb");
+    if (!f) {
+        printf("Cannot read staged Skill\n");
+        return;
+    }
+    first = fgetc(f);
+    second = fgetc(f);
+    fclose(f);
+    if (first != '#' && !(first == '-' && second == '-')) {
+        printf("Invalid skill format: must start with # or ---\n");
+        return;
+    }
+    if (rename(part_path, final_path) != 0) {
+        printf("Cannot activate Skill: %s\n", final_path);
+        return;
+    }
+
+    printf("Skill committed: %s (%zu bytes)\n", final_path,
+           g_skill_import_size);
+    g_skill_import_name[0] = '\0';
+    g_skill_import_size = 0;
+    g_skill_import_active = 0;
 }
 
 #if AGENT_SKILL_SYNC_ENABLED
@@ -1236,6 +1442,12 @@ static void* cli_thread(void* arg)
             cmd_exit_app();
         else if (strcmp(cmd, "install_skill") == 0)
             cmd_install_skill(argc, argv);
+        else if (strcmp(cmd, "skill_write_begin") == 0)
+            cmd_skill_write_begin(argc, argv);
+        else if (strcmp(cmd, "skill_write_hex") == 0)
+            cmd_skill_write_hex(argc, argv);
+        else if (strcmp(cmd, "skill_write_commit") == 0)
+            cmd_skill_write_commit(argc, argv);
 #if AGENT_SKILL_SYNC_ENABLED
         else if (strcmp(cmd, "skill_sync") == 0)
             cmd_skill_sync();

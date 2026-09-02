@@ -8,7 +8,7 @@ ai_agent 当前的 Skill loader 扫描技能目录下的平铺 `.md` 文件，�
 
 ## 安装与验收
 
-1. 将 `home_security.md` 以原文安装为当前固件的 `/data/ai_agent/skills/home_security.md`（或最终基线实际配置的技能目录）。
+1. 将 `home_security.md` 以原文安装为当前固件的 `/data/ai_agent/skills/home_security.md`（或最终基线实际配置的技能目录）；本次真机通过受限串口分块导入完成，提交字节数为 3185。
 2. 在设备执行 `/skill` 或 `ask 技能列表`，确认摘要出现“HomeMind 主动安防演示”。
 3. 发送“开始主动安防演示”，确认先创建 cron 任务，而不是立即声称 LED 已改变。
 4. 等待约 15 秒，保留 `Cron job firing`、`Executing action: led_control`、`Action led_control OK` 和实际 LED 状态。

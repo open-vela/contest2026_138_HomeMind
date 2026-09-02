@@ -2,7 +2,7 @@
 
 HomeMind 是运行在 ESP32-S3-EYE 上的家庭智能终端。项目以 OpenVela/Apache NuttX 和 `ai_agent` 为端侧基础，通过局域网家庭服务、MQTT、MiMo 和微信小程序形成“感知—规划—执行—反馈”闭环。
 
-> 当前状态（2026-09-02）：OpenVela 固件、自动联网、MiMo 真实问答、白名单本地工具、Flash 持久化、LCD 状态界面和 10 轮网络/问答稳定性已经真机验证；`install_skill` HTTPS URL 解析修复后的新固件也已构建、烧录并校验。自定义 Skill 已在设备 `/data/ai_agent/skills/` 被发现并调用过，但当前设备文件仍是循环 cron 版本，尚未接受为最终一次性主动场景。摄像头端侧推理、离线唤醒、真实米家设备和最终小程序闭环尚未完成。未完成能力不会使用固定值或测试输入冒充。
+> 当前状态（2026-09-02）：OpenVela 固件、自动联网、MiMo 真实问答、白名单本地工具、Flash 持久化、LCD 状态界面和 10 轮网络/问答稳定性已经真机验证；`install_skill` HTTPS URL 解析修复及受限串口 Skill 原文导入路径已构建、烧录并校验。仓库 Skill 已以 3185 字节原文安装到设备 `/data/ai_agent/skills/`，并完成一次“15 秒后执行、执行后删除”的板载 LED 主动场景验收。摄像头端侧推理、离线唤醒、真实米家设备、MQTT 状态闭环和最终小程序闭环尚未完成。未完成能力不会使用固定值或测试输入冒充。
 
 ## 参赛方向与硬件
 
@@ -28,7 +28,7 @@ HomeMind 是运行在 ESP32-S3-EYE 上的家庭智能终端。项目以 OpenVela
 
 ## 比赛截止前的交付边界
 
-以下功能正在按冲刺计划实施，完成前均视为“未实现”：
+以下功能仍未完成，完成前均视为“未实现”：
 
 1. “你好，openvela”离线唤醒，并通过 LCD/LED 反馈；
 2. 板载摄像头实时人员/人脸存在检测；
@@ -36,8 +36,6 @@ HomeMind 是运行在 ESP32-S3-EYE 上的家庭智能终端。项目以 OpenVela
 4. MQTT 命令的 `acked → done → status` 状态闭环；
 5. 一台真实米家灯或插座的开关控制；
 6. 小程序展示真实设备、事件、待办、日程和资产；
-7. 一个按最终仓库内容安装到技能目录、由设备实际加载执行且工具/时间策略一致的自定义 Skill；
-8. 一个已用日志证明“设置一次、按约定时间单次执行、执行后不重复”的主动场景。
 
 详细排期和完成定义见 [比赛冲刺计划](docs/HomeMind_比赛冲刺计划_2026-08-30_至_2026-09-20.md)。
 
@@ -69,7 +67,7 @@ ESP32-S3-EYE / OpenVela
 | `tools/deploy-to-vm.sh` | 幂等安装 ai_agent overlay 和 NuttX 补丁 |
 | `backend/` | FastAPI、MQTT、WSS、SQLite 和家庭网关 |
 | `miniprogram/` | 微信小程序 |
-| `app/homemind/skills/` | Skill 设计草案；以设备实际安装验收为准 |
+| `app/homemind/skills/` | 已验收的运行时 Skill 原文及静态校验器 |
 | `artifacts/` | 已验证 BIN/ELF 及 SHA-256 |
 | `logs/` | 按官方采集器导出的 AI Coding 日志 |
 | `docs/submission/` | 官方作品模板和提交合规清单 |
@@ -113,7 +111,7 @@ SERIAL_PORT=/dev/ttyACM0 OPENVELA_ROOT=$HOME/work/openvela ./scripts/build.sh fl
 - 旧 Ubuntu 生产工作区的 `repo`/Git 元数据异常，只作为历史验收现场保留；
 - 真实 AI Coding 日志尚未使用参赛者 GitHub 登录名完成官方采集器导出；
 - 小程序仍需微信开发者工具干净编译及 HTTPS/WSS 真机验收；
-- 摄像头、麦克风、米家设备和主动 Skill 尚未完成最终验收；
+- 摄像头、麦克风、米家设备和小程序真实联调尚未完成最终验收；主动 Skill 已完成本阶段的一次性 LED 场景验收，但仍需视频材料；
 - 当前阶段的语义能力会调用 MiMo 公网 API，不能描述为“完全不经过第三方公网”。
 
 ## 提交要求
