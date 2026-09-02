@@ -94,7 +94,7 @@ def on_message(cli, userdata, msg):
                 elif st == "done" and cmd.status in ("queued", "acked"):
                     cmd.status = "done"
                     cmd.done_at = datetime.utcnow()
-                elif st == "expired":
+                elif st == "expired" and cmd.status in ("queued", "acked"):
                     cmd.status = "expired"
                 new_status = cmd.status
                 db.commit()

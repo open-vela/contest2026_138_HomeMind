@@ -35,7 +35,11 @@ def send_command(device_id: str, req: CmdReq,
                 status_code=400,
                 detail=f"action not allowed: {req.action}. allowed={settings.ALLOWED_ACTIONS}")
 
-        ttl = int(req.params.get("ttl", settings.COMMAND_TTL_SEC))
+        raw_ttl = req.params.get("ttl", settings.COMMAND_TTL_SEC)
+        if (isinstance(raw_ttl, bool) or not isinstance(raw_ttl, int)
+                or not 1 <= raw_ttl <= max(settings.COMMAND_TTL_SEC, 300)):
+            raise HTTPException(status_code=400, detail="ttl must be an integer between 1 and 300 seconds")
+        ttl = raw_ttl
         cid = uuid.uuid4().hex
         cmd = Command(
             command_id=cid, user_id=user_id, device_id=device_id,

@@ -2,7 +2,7 @@
 
 HomeMind 是运行在 ESP32-S3-EYE 上的家庭智能终端。项目以 OpenVela/Apache NuttX 和 `ai_agent` 为端侧基础，通过局域网家庭服务、MQTT、MiMo 和微信小程序形成“感知—规划—执行—反馈”闭环。
 
-> 当前状态（2026-09-02）：OpenVela 固件、自动联网、MiMo 真实问答、白名单本地工具、Flash 持久化、LCD 状态界面和 10 轮网络/问答稳定性已经真机验证；`install_skill` HTTPS URL 解析修复及受限串口 Skill 原文导入路径已构建、烧录并校验。仓库 Skill 已以 3185 字节原文安装到设备 `/data/ai_agent/skills/`，并完成一次“15 秒后执行、执行后删除”的板载 LED 主动场景验收。摄像头端侧推理、离线唤醒、真实米家设备、MQTT 状态闭环和最终小程序闭环尚未完成。未完成能力不会使用固定值或测试输入冒充。
+> 当前状态（2026-09-02）：OpenVela 固件、自动联网、MiMo 真实问答、白名单本地工具、Flash 持久化、LCD 状态界面和 10 轮网络/问答稳定性已经真机验证；`install_skill` HTTPS URL 解析修复及受限串口 Skill 原文导入路径已构建、烧录并校验。仓库 Skill 已以 3185 字节原文安装到设备 `/data/ai_agent/skills/`，并完成一次“15 秒后执行、执行后删除”的板载 LED 主动场景验收。MQTT broker→家庭网关→串口→板载 LED→`acked/done/status` 段落已完成真实双向测试；云端 API 数据库/WSS/小程序真机段落尚未完成。摄像头端侧推理、离线唤醒、真实米家设备和最终材料仍未完成。未完成能力不会使用固定值或测试输入冒充。
 
 ## 参赛方向与硬件
 
@@ -33,7 +33,7 @@ HomeMind 是运行在 ESP32-S3-EYE 上的家庭智能终端。项目以 OpenVela
 1. “你好，openvela”离线唤醒，并通过 LCD/LED 反馈；
 2. 板载摄像头实时人员/人脸存在检测；
 3. 文本意图经家庭服务和 MiMo 转换为受 JSON Schema 约束的任务；
-4. MQTT 命令的 `acked → done → status` 状态闭环；
+4. 云端 API/SQLite → MQTT → 网关 → WSS → 小程序的完整状态闭环（设备侧 MQTT 段落已通过，云端/小程序段落仍待验收）；
 5. 一台真实米家灯或插座的开关控制；
 6. 小程序展示真实设备、事件、待办、日程和资产；
 
@@ -111,7 +111,7 @@ SERIAL_PORT=/dev/ttyACM0 OPENVELA_ROOT=$HOME/work/openvela ./scripts/build.sh fl
 - 旧 Ubuntu 生产工作区的 `repo`/Git 元数据异常，只作为历史验收现场保留；
 - 真实 AI Coding 日志尚未使用参赛者 GitHub 登录名完成官方采集器导出；
 - 小程序仍需微信开发者工具干净编译及 HTTPS/WSS 真机验收；
-- 摄像头、麦克风、米家设备和小程序真实联调尚未完成最终验收；主动 Skill 已完成本阶段的一次性 LED 场景验收，但仍需视频材料；
+- 摄像头、麦克风、米家设备和小程序真实联调尚未完成最终验收；主动 Skill 与 MQTT 设备侧段落已有证据，但仍需云端/小程序联调和视频材料；
 - 当前阶段的语义能力会调用 MiMo 公网 API，不能描述为“完全不经过第三方公网”。
 
 ## 提交要求
