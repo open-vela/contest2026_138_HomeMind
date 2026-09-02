@@ -2,7 +2,7 @@
 
 本目录继续在 Win11 的微信开发者工具中开发，不进入默认 Ubuntu Core 迁移包。
 
-## 当前状态（2026-08-29 更新）：可编译就绪
+## 当前状态（2026-09-02 更新）：可编译就绪，等待微信真机验收
 
 C1 小程序侧基础恢复完成：
 
@@ -27,7 +27,7 @@ C1 小程序侧基础恢复完成：
 - **已接入云端**：
   - `utils/api.js`：微信登录(`/v1/auth/wechat/login`)、设备列表(`GET /v1/devices`)、下发(`POST /v1/devices/{id}/commands`)、查状态(`GET /v1/commands/{id}`)；
   - `utils/ws.js`：WSS `/v1/ws/app?token=...` 推送状态与命令 ACK（心跳 20s）；
-  - `pages/devices`：登录后自动绑定 `esp32s3-eye`，开灯/关灯经云端下发，WSS 收到 ACK 后页面更新；
+  - `pages/devices`：登录后自动绑定 `esp32s3-eye`，开灯/关灯经云端下发；只有收到最终 `done/expired` 才解除防重入，WSS 丢失时轮询命令状态，并支持真实云端解绑；
   - `pages/settings`：新增微信登录状态卡片，服务器地址默认 `hfy-ai.cloud`；
 - 后端实现见 `../backend/`（nginx + FastAPI + mosquitto TLS + SQLite），部署手册 `../backend/README.md`。
 - 设备侧已就绪能力：自动联网、MiMo 问答、本地工具（LED/设备信息/BOOT 键）。
@@ -42,7 +42,8 @@ C1 小程序侧基础恢复完成：
 ## 待验收项
 
 - 微信开发者工具清洁编译；
-- 真机 HTTPS 登录、WSS 状态推送与 LED 命令 ACK。
+- 云端 API 部署本地最新解绑/TTL 改动；
+- 真机 HTTPS 登录、WSS 状态推送、LED 命令 `acked/done/status` 与失败回显。
 
 ## 备份命令
 

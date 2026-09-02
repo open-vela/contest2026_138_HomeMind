@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from ..db import SessionLocal
 from ..models import DeviceBinding, DeviceStatus
@@ -45,5 +45,21 @@ def bind_device(req: BindReq, user_id: str = Depends(get_current_user)):
         db.add(b)
         db.commit()
         return {"device_id": b.device_id, "name": b.name}
+    finally:
+        db.close()
+
+
+@router.delete("/devices/{device_id}")
+def unbind_device(device_id: str, user_id: str = Depends(get_current_user)):
+    """Remove only the user's binding; retain device status and command audit data."""
+    db = SessionLocal()
+    try:
+        binding = db.query(DeviceBinding).filter_by(
+            user_id=user_id, device_id=device_id).first()
+        if not binding:
+            raise HTTPException(status_code=404, detail="device not bound to this user")
+        db.delete(binding)
+        db.commit()
+        return {"device_id": device_id, "status": "unbound"}
     finally:
         db.close()

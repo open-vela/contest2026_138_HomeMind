@@ -3,6 +3,14 @@
 > 整理时间：2026-09-02（当前事实截止 2026-09-02）
 > 目标：ESP32-S3-EYE 独立运行 OpenVela/ai_agent，自动联网，直接调用 MiMo，并安全执行最小本地工具。
 
+## 2026-09-02 MQTT 闭环与媒体能力核验（本地完成，未推送）
+
+- **MQTT 真实段落闭环**：Ubuntu 家庭网关已部署本地 `gateway_agent.py` 与 `command_policy.py`，并完成真实 broker → 网关 → `/dev/ttyACM0` → `ai_agent` → 板载 LED → MQTT 的双向测试；`led.on`、`led.off` 各收到 `acked → done`，对应状态分别为 `on/off`，单次约 201 ms。证据见 `docs/evidence/2026-09-02_mqtt_gateway_loop.txt`。
+- **安全门禁**：命令 ID、动作白名单、时间戳、TTL、QoS1 重放抑制已加入网关；只有串口输出确认目标 LED JSON 状态才发 `done`，失败发 `expired`，不再乐观更新 LED 状态。网关服务当前 active，未执行 Git push。
+- **小程序/后端本地改动**：设备解绑已改为真实 `DELETE /v1/devices/{device_id}`；设备命令只在最终 `done/expired` 解除防重入，并增加 WSS 丢失时的命令状态轮询。Windows 已完成 Python 语法、Node JS 语法和 JSON 解析检查；云端 API 尚未部署这批改动，微信开发者工具/真机仍未验收。
+- **摄像头与麦克风负证据**：板端探测没有 `/dev/video0`、`/dev/audio` 或 `/dev/i2s*`，`/dev` 仅有显示、GPIO、串口和基础节点；现有 camera tool 默认 `CONFIG_AI_AGENT_CAMERA=n`，语音源码没有离线唤醒模型/关键词检测。证据见 `docs/evidence/2026-09-02_media_probe.txt`，摄像头和“你好，openvela”离线唤醒不能标记完成。
+- **仍未完成**：真实米家设备桥接、FastAPI 数据库/WSS/小程序真机闭环、真实 AppID 清洁编译与预览、最终视频/实物照片/官方 DOCX-PDF/提交包、官方仓远程 push/PR merge。
+
 ## 2026-09-02 Skill runtime completion（本地完成，未推送）
 
 - **Skill 源文件**：将 `app/homemind/skills/home_security.md` 收口为 ai_agent 当前实现使用的平铺 `.md` 格式，并增加只调用现有白名单工具的单次 15 秒主动演示定义；`tools/validate-home-security-skill.py` 静态检查通过，文件 3185 字节、低于设备安装缓冲区限制。
@@ -14,7 +22,7 @@
 - **原始日志补充**：NuttX `dmesg` 已抓到本次固件启动、`/data/ai_agent` 存储、工具注册、10 个内置 Skill、网络 IP 和 Stop 清理记录；板端没有 `grep/tail`，未伪造 `Cron job firing` 等缺失行。完整串口过程见 `logs/hardware-2026-09-02-skill-runtime.log`。
 - **安装通道限制**：临时 HTTPS 安装曾到达设备 TLS 连接阶段，但设备到家庭 Ubuntu `192.168.31.251` 的同网段访问返回 `errno=101`，服务端无请求；本次设备文件由设备内置 `write_file` 生成，不能作为仓库源文件原文安装证据。
 - **清理**：循环 cron 已清除；临时 HTTPS 服务、证书和 staging 文件已删除；家庭 `gateway_agent.py` 已恢复运行。完整过程见 `logs/hardware-2026-09-02-skill-runtime.log`。
-- **推送状态**：本地 `contest-final` 仍未执行远程 push；Skill/主动场景本阶段已收口，但摄像头、离线唤醒、真实米家设备和最终小程序闭环仍未完成。
+- **推送状态**：本地 `contest-final` 仍未执行远程 push；Skill/主动场景和 MQTT 设备侧段落已收口，但摄像头、离线唤醒、真实米家设备、云端 API/WSS/小程序真机闭环和最终材料仍未完成。
 
 ## 2026-09-01 最终长稳回归（本地已完成，未推送）
 
@@ -27,7 +35,7 @@
 - **中间方案对照**：仅保持 `keep-alive` 的版本在第 4 轮复现 stale pooled socket 路径；最终主动关闭方案在同一 10 轮门禁中 10/10 通过。
 - **安全与推送**：完整 MiMo key、Wi-Fi 密码和 SSH 密码未写入仓库、文档或日志；本地提交已完成，远程 push 仍未执行。
 
-**当前结论**：设备端固件、干净构建、烧录、10 轮长稳回归、自定义 Skill 原文安装和一次性主动 LED 场景均已有本地证据；本阶段新增提交尚未推送。大赛整体仍不能宣称全部完成：摄像头端侧推理、离线唤醒、真实米家设备、MQTT 状态闭环、微信小程序真实联调以及最终视频/平台材料仍是边界项。
+**当前结论**：设备端固件、干净构建、烧录、10 轮长稳回归、自定义 Skill 原文安装、一次性主动 LED 场景和 MQTT 设备侧段落均已有本地/实机证据；本阶段新增提交尚未推送。大赛整体仍不能宣称全部完成：摄像头端侧推理、离线唤醒、真实米家设备、云端 API/数据库/WSS/微信小程序真实联调以及最终视频/平台材料仍是边界项。
 
 ## 2026-09-01 暂停点（TLS body framing 修复后）
 

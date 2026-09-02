@@ -1,0 +1,20 @@
+HomeMind media capability probe — 2026-09-02
+
+Environment
+- Target: ESP32-S3-EYE attached to the Ubuntu host over /dev/ttyACM0.
+- Probe path: temporarily terminated the user-owned gateway process, used the board's serial CLI, and allowed systemd to restart the gateway afterwards.
+- Probe commands: `quit`, `ls /dev/video0`, `ls /dev/audio`, `ls /dev/i2s*`, `ls /dev`.
+
+Observed serial output
+- `ls /dev/video0`: `nsh: ls: stat failed: 2`
+- `ls /dev/audio`: `nsh: ls: stat failed: 2`
+- `ls /dev/i2s*`: `nsh: ls: stat failed: 2`
+- `/dev` listed `console`, `esp32s3flash`, `fb0`, `gpio0`, `gpio1`, `null`, `random`, `timer0`, `ttyACM0`, `ttyS1`, `urandom`, and `zero`.
+
+Source/config cross-check
+- The vendored `ai_agent` camera tool is a generic V4L2 implementation and is guarded by `CONFIG_AI_AGENT_CAMERA`, whose default is `n` and which requires `VIDEO` plus `/dev/video0`.
+- The available voice channel is push-to-talk recording followed by streaming or batch ASR. Source inspection found no offline wake-word model or keyword detector.
+
+Conclusion
+- Camera capture and offline wake-word acceptance are blocked by missing board media nodes and model/runtime support. This is a negative hardware finding, not a feature pass.
+- Do not claim camera inference, microphone PCM capture, or offline “你好，openvela” wake-up in README, video, or the official report until a real device/firmware probe produces evidence.
