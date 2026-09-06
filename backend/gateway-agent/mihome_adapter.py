@@ -163,6 +163,30 @@ class HomeAssistantMiHomeAdapter:
             time.sleep(_CONFIRM_INTERVAL_S)
         return {"ok": True, "entity_id": entity_id, "state": expected}
 
+    def notify_text(self, entity_id: str, text: str) -> dict:
+        """Send text to a notify.* entity (e.g. 小爱音箱 播放文本) via HA.
+
+        Independent of the light/switch allowlist: the target entity comes
+        from the gateway's own HOMEMIND_SPEAK_ENTITY configuration.
+        """
+        if not self.enabled:
+            raise MiHomeError(
+                "MiHome adapter disabled; set HOMEMIND_HA_URL and HOMEMIND_HA_TOKEN"
+            )
+        if not isinstance(entity_id, str) or not entity_id.startswith("notify."):
+            raise MiHomeError("speak entity must be a notify.* entity")
+        text = (text or "").strip()
+        if not text:
+            raise MiHomeError("speak text is empty")
+        if len(text) > 500:
+            text = text[:500]
+        self._request(
+            "POST",
+            "/api/services/notify/send_message",
+            {"entity_id": entity_id, "message": text},
+        )
+        return {"ok": True, "entity_id": entity_id, "len": len(text)}
+
     def execute(self, action: str, params: Optional[dict] = None) -> dict:
         if action not in _POWER_ACTIONS:
             raise MiHomeError("MiHome action is not allowed")

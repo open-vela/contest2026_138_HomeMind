@@ -30,6 +30,9 @@ services:
       - MQTT_BROKER_PORT=1883
       - DEMO_DEVICE_ID=${DEMO_DEVICE_ID:-esp32s3-eye}
       - ALLOWED_ACTIONS=${ALLOWED_ACTIONS:-led.on,led.off,device.info}
+      - MEDIA_TOKEN=${MEDIA_TOKEN:-}
+      - MIMO_API_KEY=${MIMO_API_KEY:-}
+      - MIMO_MODEL=${MIMO_MODEL:-mimo-v2.5}
       - CORS_ORIGINS=${CORS_ORIGINS:-}
     volumes:
       - ./api/data:/app/data
