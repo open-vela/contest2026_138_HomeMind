@@ -1,20 +1,173 @@
 # HomeMind 当前状态
 
-> 整理时间：2026-08-23（当前事实截止 2026-08-23）  
+> 整理时间：2026-09-06（当前事实截止 2026-09-06）
 > 目标：ESP32-S3-EYE 独立运行 OpenVela/ai_agent，自动联网，直接调用 MiMo，并安全执行最小本地工具。
+
+## 2026-09-06 真实米家设备开关闭环验收通过（本地完成，未推送）
+
+- **设备**：公望府 阳台"阳台开关"（`linp_cn_950233435_t2dbw1`，实体 `switch.linp_cn_950233435_t2dbw1_on_p_2_1`），白名单仅此一个实体。链路：MQTT TLS → 家庭网关 → `mihome_adapter.py` → Home Assistant REST → Xiaomi Home 集成 → 真实设备。
+- **实机结果**：MQTT 全链路 `mihome.set_power on/off` 均 `acked → done` 且 `mihome_result` 回读确认；`mihome.get_state` 返回真实状态；重复 on/off/on/off 4/4 通过；结束时设备恢复 `off`。直连适配器 on/off 同样通过。
+- **缺陷修复**：`set_power` 状态回读存在 HA 秒级滞后，已在适配器加入 3 秒确认窗口轮询（超时仍失败，保持 fail-closed），新增单元测试后 4 项测试通过并重新部署重启（服务 active，串口/MQTT 正常）。
+- **安全**：HA 长期访问令牌只存于服务器 `.env`（0600），未进入仓库、日志或本文件；白名单外实体默认拒绝。
+- 证据见 `docs/evidence/2026-09-06_mihome_device_accept.md` 与 `docs/evidence/2026-09-06_mihome_gateway_deploy.md`。本轮 gateway-agent/mihome 改动、证据与 STATUS 同步已在 Ubuntu 官方仓 `contest-final` 分支完成一次本地提交（2026-09-06，未推送远程）；此前各轮（09-01～09-03 固件/媒体/Skill 等）在仓中仍为未提交工作区改动。
+- **下一执行队列**：① 小程序真机 `wx.login`/绑定/命令状态与失败回显（微信侧外部门禁）；② 连续音频与离线唤醒边界收口；③ 最终固件全项回归；④ 视频、照片、报告与官方提交材料。
+
+## 2026-09-06 MiHome 网关部署（等待 token 与白名单）
+
+- 家庭 Ubuntu 上 Home Assistant（Docker stable）运行正常，米家集成已导入真实设备（实体注册表中 `xiaomi_home` 实体 1835 个，`light.*` 51 个、`switch.*` 362 个），与用户确认的米家登录解除一致。
+- `backend/gateway-agent/` 的 `gateway_agent.py`（含 mihome 分支）、`mihome_adapter.py`、`command_policy.py` 已部署至 `/home/hfy/homemind-gateway/`（备份保留），部署哈希与仓库一致，服务重启后 active、串口与 MQTT 正常；本地 3 项适配器单元测试通过。
+- `.env` 已加 `HOMEMIND_HA_URL`；`HOMEMIND_HA_TOKEN` 与 `HOMEMIND_MIHOME_ALLOWED_ENTITIES` 仍为空，适配器 fail-closed。**真实米家设备 `mihome.set_power`/`mihome.get_state` 开关与状态回读尚未执行**；待用户提供 HA 长期访问令牌并选定一台允许开关的设备后，经 MQTT→网关→HA→设备→回读→`acked→done` 验收。详见 `docs/evidence/2026-09-06_mihome_gateway_deploy.md`。
+- （后记：token 与白名单已于同日配置完成，验收结果见上一节。）
+
+## 2026-09-06 米家登录阻塞解除（用户确认）
+
+- 用户确认 Home Assistant 中的米家登录问题已经解决；本记录不推断具体修复方法，也不把历史 OAuth/DNS 排错步骤视为当前操作要求。
+- 当前仍未把“登录成功”写成真实设备闭环：米家设备导入、单台 Wi-Fi 灯/插座开关、状态回读、HomeMind 网关动作和微信小程序真机联动均需单独取得证据。
+- 下一步按比赛主线执行：先完成一台真实米家设备的 `mihome.set_power`/`mihome.get_state` 验收，再做小程序真机登录、绑定、命令状态与失败回显；随后继续连续音频/离线唤醒、最终回归和提交材料。
+- 后续路线与家庭主机、HomePod、ROS 2/Microduck、云端维护及 CloudBase 影响见 [`docs/HomeMind_后续路线与评估_2026-09-06.md`](docs/HomeMind_后续路线与评估_2026-09-06.md)。
+
+## 2026-09-03 媒体实机验收（未推送）
+
+- 本轮未执行远程 Git push；已在 Ubuntu 干净工作区完成部署、构建、取回产物并烧录到 ESP32-S3-EYE。最新 BIN/ELF 的 SHA-256 已同步到 `artifacts/SHA256SUMS`：`8cf605d958ddf99731c47ae170572f8da581516a2ad3b7572f6f1efe66aa0172` / `a59d163c13a75cf6749a204788154b7bab8cc3d21f95ba80c7bbf00abb0cdf40`，烧录输出为 `Hash of data verified`。
+- 摄像头连续两次实机探测均得到真实 OV2640 QVGA RGB565 帧：`MEDIA_VIDEO_FRAME bytes=153600`；这证明 `/dev/video0`、LCD_CAM/V4L2、OV2640 时钟/引脚和 DMA 捕获路径可用，但不等于端侧人脸/人员推理已经完成。
+- 麦克风连续两次实机探测均完成 `/dev/audio/pcm_in0` 配置、`AUDIOIOC_GETBUFFERINFO`、缓冲区分配/入队/启动，并得到 `MEDIA_AUDIO_PCM bytes=640`。当前探针使用一个有限的 640 字节、4 字节对齐 PCM 缓冲，证明 I2S0 RX DMA 能返回真实 PCM 数据；尚未证明长时间连续流、语音识别或唤醒词效果。
+- 多缓冲试验以及同一 APB 重入队试验均出现首个缓冲完成、后续缓冲未完成的驱动/上半层生命周期问题，因此本轮只将“单缓冲有限采样”记为已验收；没有把多缓冲稳定流式采集写成完成。I2S0 为 master，GPIO 为 BCLK/WS/DIN=41/42/2，与 ESP32-S3-EYE 板级资料一致。
+- 离线唤醒关键词模型/运行时仍未接入；不能宣称“你好，openvela”或“Hello, openvela”离线唤醒完成。米家登录阻塞已由用户于 2026-09-06 确认解除，但真实米家设备控制闭环仍未完成；公网 HTTPS、OpenAPI 和 WSS 鉴权入口已可达，但真实微信登录、认证 WSS 消息和小程序真机仍受 AppID/账号/云端业务配置等外部门禁影响。
+- 证据详见 `docs/evidence/2026-09-03_media_pause.txt`。后续优先级为：连续音频/驱动收口或明确限制、离线 KWS 模型路线、真实米家设备、公共服务部署与小程序真机、最终报告/视频/照片；仍不推送远程。
+
+## 2026-09-03 官方 GitHub README 与提交要求复核
+
+- 官方仓 `https://github.com/open-vela/contest2026_138_HomeMind` 当前网页仍显示
+  `dev-ai-contest-2026` 模板分支（3 个模板提交）；本地 `contest-final` 的 HomeMind
+  改动尚未 push，所以不能以 GitHub 当前页面判断本地成果是否存在。
+- 官方 README 第六节要求最终 README 至少说明：作品简介、选题方向、目录结构、
+  完整运行方式和 AI Coding 使用说明，并指向 `logs/` 中的完整日志。
+- 官方大赛说明要求另提交作品介绍文档（`.docx` / `.pdf` / `.pptx`）、不超过 5 分钟的
+  `mp4`/`mov` 等视频和专属仓地址；代码按 fork → commit/push → PR → 自行 review 合入，
+  `nuttx` 等公共仓改动另走对应公共仓 PR。最终提交前仍需补齐技术报告、视频、实物照片、
+  日志真实 GitHub 登录名校验和远端合并状态。
+
+## 2026-09-02/03 公网 API/WSS 只读复核
+
+- 2026-09-02 的历史探测曾被 DNSPod webblock 拦截；2026-09-03 备案/服务商门禁
+  已变化，`hfy-ai.cloud` 的 HTTP 80 正常 301 到 HTTPS，HTTPS 证书校验和
+  `GET /v1/health` 均成功，返回 `{"status":"ok","service":"homemind-c1"}`。
+- 公网 `GET /openapi.json` 返回 200，未授权 `GET /v1/devices` 返回 401，空码微信
+  登录返回 400；带无效 token 的 WebSocket Upgrade 到 `/v1/ws/app` 返回 403。
+  这些结果证明 Nginx/FastAPI/WSS 鉴权入口已可达，不等于真实微信 token、WSS 消息
+  推送和小程序真机闭环已经通过。
+- 真实微信 `wx.login` code、开发者工具清洁编译、设备绑定、命令状态和失败回显仍需
+  在微信侧完成；家庭 Ubuntu 无需开放公网入站端口。证据见
+  `docs/evidence/2026-09-02_public_endpoint_probe.txt`，未执行远程 push。
+
+## 2026-09-02 MQTT 闭环与小程序改动（本地完成，未推送）
+
+- **MQTT 真实段落闭环**：Ubuntu 家庭网关已部署本地 `gateway_agent.py` 与 `command_policy.py`，并完成真实 broker → 网关 → `/dev/ttyACM0` → `ai_agent` → 板载 LED → MQTT 的双向测试；`led.on`、`led.off` 各收到 `acked → done`，对应状态分别为 `on/off`，单次约 201 ms。证据见 `docs/evidence/2026-09-02_mqtt_gateway_loop.txt`。
+- **安全门禁**：命令 ID、动作白名单、时间戳、TTL、QoS1 重放抑制已加入网关；只有串口输出确认目标 LED JSON 状态才发 `done`，失败发 `expired`，不再乐观更新 LED 状态。网关服务当前 active，未执行 Git push。
+- **小程序/后端本地改动**：设备解绑已改为真实 `DELETE /v1/devices/{device_id}`；设备命令只在最终 `done/expired` 解除防重入，并增加 WSS 丢失时的命令状态轮询。Windows 已完成 Python 语法、esprima JS 语法和 JSON 解析检查；公网入口只读门禁已通过，微信开发者工具/真机和认证业务流仍未验收。
+- **仍未完成**：真实米家设备桥接、FastAPI 数据库/WSS/小程序真机闭环、真实 AppID 清洁编译与预览、最终视频/实物照片/官方 DOCX-PDF/提交包、官方仓远程 push/PR merge。
+
+## 2026-09-02 媒体驱动适配续接（源码已落库，当前边界见上方 2026-09-03 记录）
+
+- 已按 ESP32-S3-EYE 的实际引脚加入 OV2640 DVP 板级适配：LCD_CAM DMA/V4L2
+  注册、OV2640 I2C0 配置、GPIO15 LEDC XCLK，以及 I2S0 RX 麦克风注册；部署
+  补丁为 `firmware/patches/0002-homemind-esp32s3-eye-media.patch`，板级源文件
+  为 `firmware/nuttx_media/esp32s3_board_camera.c`。
+- 已把配置写入 `scripts/build.sh`：I2C0 SDA/SCL=4/5，I2S0 BCLK/WS/DIN=41/42/2，
+  16 kHz/16 bit RX，LEDC channel 0 XCLK=GPIO15。此处没有打开通用 JPEG camera
+  tool，因为当前板级驱动描述的是 QVGA RGB565；在没有编码或传感器 JPEG 模式
+  证据前直接送 Vision LLM 会把原始帧误标为 JPEG。
+- 本段原始 staging 记录当时尚未完成干净 Ubuntu 构建；随后媒体固件已在真机得到
+  一帧 320x240 RGB565 图像。旧的 `/dev/video0`、`/dev/audio`、`/dev/i2s*` 负探测
+  只代表旧固件。详细边界见 `docs/evidence/2026-09-02_media_driver_staging.md`。
+- 未执行远程 push；MiMo key、Wi-Fi 密码和 SSH 密码不写入仓库。
+
+## 2026-09-02 Skill runtime completion（本地完成，未推送）
+
+- **Skill 源文件**：将 `app/homemind/skills/home_security.md` 收口为 ai_agent 当前实现使用的平铺 `.md` 格式，并增加只调用现有白名单工具的单次 15 秒主动演示定义；`tools/validate-home-security-skill.py` 静态检查通过，文件 3185 字节、低于设备安装缓冲区限制。
+- **真实缺陷修复**：修正 `install_skill` 对 HTTPS URL 的解析，使其拆分为 host、port、path 后再调用 TLS；此前完整 `https://...` 字符串会被错误传给 `getaddrinfo()`。
+- **新固件**：增加受限串口 Skill 导入命令后重新完成干净构建、SHA 校验和烧录；BIN `d045e2c79159152cec4f8e9f2772feeae29ad7284d7a8c8d08cb9e6c2ec8ff2e`，ELF `7c05f2c9f513d17fc67b48c7c5a87ba153f78b66cdf3be9e23773850a60cdd16`，esptool v5.3.1 `Hash of data verified`。
+- **设备加载证据**：设备实际技能目录为 `/data/ai_agent/skills/`；`ask list skills` 出现 `Home Security Skill`，证明自定义 `.md` 已被 loader 发现。
+- **原文安装证据**：为绕开同网段客户端隔离，固件新增 `skill_write_begin` / `skill_write_hex` / `skill_write_commit` 受限路径；将仓库 `home_security.md` 原文分块导入后，设备明确返回 `Skill committed: /data/ai_agent/skills/home_security.md (3185 bytes)`，与静态校验的源文件字节数一致。写入使用 `.part` 临时文件，最后才原子改名为 `.md`。
+- **主动执行证据**：在原文安装后，用户可见响应为“安防演示已启动”“15 秒后将自动闪烁提醒一次”“任务完成后会自动删除”；等待 25 秒后停止请求确认“定时任务：已清空、LED 灯：已关闭”。这次已按仓库定义接受为一次性主动场景；仍需提交视频和更完整的原始 Cron 行时，不能用本段文字替代。
+- **原始日志补充**：NuttX `dmesg` 已抓到本次固件启动、`/data/ai_agent` 存储、工具注册、10 个内置 Skill、网络 IP 和 Stop 清理记录；板端没有 `grep/tail`，未伪造 `Cron job firing` 等缺失行。完整串口过程见 `logs/hardware-2026-09-02-skill-runtime.log`。
+- **安装通道限制**：临时 HTTPS 安装曾到达设备 TLS 连接阶段，但设备到家庭 Ubuntu `192.168.31.251` 的同网段访问返回 `errno=101`，服务端无请求；本次设备文件由设备内置 `write_file` 生成，不能作为仓库源文件原文安装证据。
+- **清理**：循环 cron 已清除；临时 HTTPS 服务、证书和 staging 文件已删除；家庭 `gateway_agent.py` 已恢复运行。完整过程见 `logs/hardware-2026-09-02-skill-runtime.log`。
+- **推送状态**：本地 `contest-final` 仍未执行远程 push；Skill/主动场景和 MQTT 设备侧段落已收口，但摄像头、离线唤醒、真实米家设备、云端 API/WSS/小程序真机闭环和最终材料仍未完成。
+
+## 2026-09-01 最终长稳回归（本地已完成，未推送）
+
+- **最终修复组合**：HTTP chunked body 识别终止块；未完成/超长 body 返回读取错误；请求使用 `Connection: close` 避免复用服务端主动关闭的 stale TLS socket；TLS header/body 写入增加 15 秒总超时；释放 socket 前设置 `SO_LINGER=0`。
+- **构建配置**：干净工作区启用 `CONFIG_NET_SOLINGER=y`；同时确认 `CONFIG_NET_TCP_PREALLOC_CONNS=8`、`CONFIG_NET_TCP_ALLOC_CONNS=0`、`CONFIG_NET_TCP_WAIT_TIMEOUT=120`。
+- **最终产物**：BIN `69f321439158c9af88a2fa53c7aba3d28cbe77f657dbedefcdb4ba7d0a7d124a`，ELF `3e599f21dd7f6068aa40d68eb48cbb2e53fcc0db77ffc19eeb04c8cb5b8f77a3`；`SHA256SUMS` 与本地两份 `artifacts/` 均一致。
+- **烧录**：Ubuntu `/dev/ttyACM0` 使用 esptool v5.3.1 写入地址 `0x0`，`Hash of data verified`，hard reset 成功。
+- **最终长稳门禁**：标准自然语言请求 10/10 PASS；每轮均捕获 HTTP `200`、Agent 回复，最终 IP 均为 `192.168.31.248`；日志为 `logs/hardware-2026-09-01-stability-ok-full.log`。
+- **收尾设备状态**：`session_list` 为空；`net_status` 为 `Network connected: yes`，IP `192.168.31.248`。
+- **中间方案对照**：仅保持 `keep-alive` 的版本在第 4 轮复现 stale pooled socket 路径；最终主动关闭方案在同一 10 轮门禁中 10/10 通过。
+- **安全与推送**：完整 MiMo key、Wi-Fi 密码和 SSH 密码未写入仓库、文档或日志；本地提交已完成，远程 push 仍未执行。
+
+**当前结论**：设备端固件、干净构建、烧录、10 轮长稳回归、自定义 Skill 原文安装、一次性主动 LED 场景和 MQTT 设备侧段落均已有本地/实机证据；本阶段新增提交尚未推送。大赛整体仍不能宣称全部完成：摄像头端侧推理、离线唤醒、真实米家设备、云端 API/数据库/WSS/微信小程序真实联调以及最终视频/平台材料仍是边界项。
+
+## 2026-09-01 暂停点（TLS body framing 修复后）
+
+- **根因定位**：`vela_tls.c` 的 HTTP 读取在 chunked response 未识别终止块时，会继续等待长连接上的下一次读取；同时请求复用板端 keep-alive socket，可能把 stale 连接放大为 Agent 超时。该路径与 2026-08-31 的“网络/IP 正常但 HTTP/Agent 不完整”现象一致。
+- **代码修复**：在正式 overlay 与 staging 副本中加入 chunked 完整性判断、异常/超长 body 返回错误，并将 HTTP 请求改为 `Connection: close`，避免跨请求复用 stale TLS socket；`SOURCE_SNAPSHOT.json` 已更新为新哈希。
+- **构建与烧录**：干净工作区构建成功，BIN `70fdae2e84b01587c87c143f2da99b912bb49dd2867a8fd80dfc883e7b76e87e`，ELF `2242cb231fef3987c2b444a4e3f10214b15d1143b33082bff2fff13124e16718`；`SHA256SUMS` 自校验通过，esptool v5.3.1 写入并校验通过。
+- **冷启动回归**：5 轮均完成强 AP 选择、DHCP `ret=0`、TLS 握手、HTTP 200 和最终联网状态；自定义 token 提示被模型安全策略拒绝，故脚本语义计数为 0/5，但未再出现传输超时。
+- **自然语言连续回归**：启动 PASS；第 1–7 轮均 PASS（HTTP 200、Agent 回复、最终 IP `192.168.31.248`）。用户要求暂停后已停止后续测试进程，故尚未宣称 10/10 完成；原修复前基线为 6/10。
+- **安全与推送**：完整 API key、Wi-Fi 密码和 SSH 密码未写入仓库；本地官方仓尚未提交本次改动，远程未推送。
+
+**明日第一步**：从当前固件继续/重跑标准自然语言长稳回归，补足 10 轮；随后复核受控 `wifi_reconnect`、异常路径和最终源码/日志提交，仍不推送远程，直至用户明确要求。
+
+## 2026-09-01 续接回归结果（中间记录，已被最终回归覆盖）
+
+- **暂停后直接续跑**：3 轮自然问答严格采集为 0/3；每轮 Agent 有输出、最终 IP 正常，但窗口内未捕获 HTTP 状态行。该结果已保留为异常采集证据，不计入通过。
+- **原始单次诊断**：硬复位后会话列表为空；“只回复 OK”完整捕获 TLS 1.2、HTTP 200、`[Agent]: OK`，最终联网状态正常。
+- **连续累积诊断**：从硬复位开始连续 4 轮自然问答 4/4 PASS；每轮均捕获 TLS 握手、HTTP 200、Agent 回复和最终 IP `192.168.31.248`。
+- **受控重连诊断**：硬复位后执行 `wifi_reconnect` 再自然问答，3/3 PASS；每轮均包含内部 `ifdown_post_scan ret=0`、DHCP 恢复、HTTP 200、Agent 回复和最终 IP。
+- **串口节点**：设备 USB 串口从 `/dev/ttyACM1` 重新枚举为 `/dev/ttyACM0`，已在测试脚本中显式指定；不是固件或网络故障。
+- **当前结论**：上述为最终收口前的中间证据；完整 10/10 门禁结果以本文档顶部的最终回归章节为准。
 
 ## 2026-08-30 M0 合规收口（本提交）
 
 - **官方仓收口**：从 Ubuntu 官方仓 bundle 建立干净工作副本（`dev-ai-contest-2026` 基础上新建本地分支 `contest-final`），旧 detached-HEAD 现场未做任何改动，可随时回退对比；本提交前**未推送远端**。
 - **固件源码收口**：`firmware/ai_agent_overlay/`（16 个 ai_agent 文件精确 overlay + `SOURCE_SNAPSHOT.json` 溯源）与 `firmware/patches/0001-homemind-esp32s3-nuttx.patch`（相对 NuttX 基线 `dd92bcf4`，491 行，已在干净文件树 dry-run 通过，可重复执行幂等）。
-- **构建产物**：`artifacts/nuttx.bin|elf` 与 `SHA256SUMS`（`418044b0…`/`439c0006…`）自校验一致。**待核对**：与本文 2026-08-30 各节记录的最新烧录固件哈希（`ee22ee60…`）尚未对应，需确认 artifacts 是否为最终交付构建。
+- **构建产物**：原提交中的 `artifacts/nuttx.bin|elf` 与 `SHA256SUMS`（`418044b0…`/`439c0006…`）自校验一致；2026-08-31 已由干净工作区重建并更新为 `902ccdaa…`/`c10e1e64…`，详见下方构建记录。
 - **秘密审计**：全树扫描无 API key、密码、私钥、PAT 等真实凭据（32 处命中均为 `<ssid> <password>` 类帮助占位符）；`fei` 为官方基线 feishu 组件名，非敏感。历史泄露过的 Wi-Fi/登录凭据**仍需轮换**。
 - **假数据清理**：小程序固定温湿度/光照/噪声与假成功逻辑已移除，dashboard 以 `'--'` 占位并明确标注"未接入"；`backend/data/`、`server/data/` 等本地运行数据已加入 `.gitignore`。
 - **官方模板**：`docs/submission/2026首届openvela_AI硬件开发者大赛_作品提交模板_官方原版.docx` 已下载并验证，并已建立"只填写事实"的工作副本 `HomeMind_作品提交模板_事实工作副本.docx`（信息表/摘要/AI-Native 表已填已验证事实，未确认项显式标注待补充）；官方示例日志占位（`logs/your-github-login/`）已删除，AI 日志导出待真实 GitHub 登录名确认后补齐。
 
+## 2026-08-31 干净工作区真实复现（构建与真机验收完成）
+
+**背景**：M0 文档收口已全部提交至本地分支 `contest-final`（`dc4caeb` M0 主提交 → `21fa4d7`/`e3f6920` 模板与状态 → `65b4f54` AI 日志 → `9050a39` 脚本可执行位）。**未推送远端**。AI 日志已导出 6 个真实 Codex 会话至 `logs/2760216167@qq.com/`（manifest 含 12 个整文件剔除记录及原因）。
+
+**已核实的关键事实（Ubuntu 侧）**：
+- 旧生产工作区 `~/work/openvela` = NuttX 基线 `dd92bcf` + 未提交的 HomeMind 修改；`vendor/openvela/boards` 为空占位（板级支持在 nuttx 树内）；apps 内 mbedtls/cJSON/littlefs 等第三方源码为**未跟踪的离线布置**（repo checkout 不会带出）；旧区 `nuttx/.git` 元数据损坏（rev-list 挂死），勿再对其做 git 操作。
+- 干净工作区 `~/work/openvela-clean-20260830`：manifests 走本地 bare（`~/work/homemind-manifest-local.git`）；repo 相对 fetch `../open-vela/` 解析到 `/home/hfy/open-vela`，已建为 20 个项目镜像（objects/info/alternates 指向旧区对象库，零拷贝、旧区只读）；repo 工具经 `url.insteadOf` 重定向到本地镜像 `_git-repo.git`。repo sync 已完成 10 个 git 项目 + contest-final（65b4f54，经 bundle `~/work/transfer/contest-final.bundle` 接入）+ extras 补拷（mbedtls/cJSON 等，日志 `~/work/clean-extras.log`）。
+- **部署已通过**：`tools/deploy-to-vm.sh` 在干净区执行成功——16 个 overlay 文件安装 + NuttX 补丁"已应用"校验通过（= 补丁与旧区树逐字节一致的复现性证据）。kconfig 全部调整与 TLS1.3 关闭已生效。
+- **第三方离线依赖补齐**：目录同步遗漏了 `apps/crypto/mbedtls/v3.4.0.zip` 与 `apps/netutils/cjson/v1.7.12.tar.gz` 两个根目录归档；已从旧区复制到干净区并完成 SHA-256 校验。首次重跑因此失败；随后将两个残留解包目录按时间戳移出并保留备份，再从归档重新解包。
+- **干净构建已完成**：在 `/home/hfy/work/openvela-clean-20260830` 使用 `OPENVELA_ROOT=~/work/openvela-clean-20260830 JOBS=2 ./scripts/build.sh deploy` 后执行 `build`，日志标记 `BUILD-OK` / `BUILD-ENTRY-DONE`。最终产物：BIN `902ccdaa2109d8a2b1ecc8d5247b58d4788078eb4689e7390ee4124ec115ef56`，ELF `c10e1e64bee0f989accd4dacf6fae6ce8327ead8d386aeda7b87835ab9fd8e87`。
+- **哈希关系**：新干净构建与官方仓此前产物 `418044b0…` / `439c0006…`、STATUS 中历史烧录固件 `ee22ee60…` 均不一致；因此旧哈希视为历史构建/烧录记录，不能冒充本次干净构建。官方仓本地 `artifacts/` 已更新为本次构建结果并自校验一致。
+- **MiMo 真机验收已完成**：用户提供的 key 仅通过远端临时串口命令写入设备；`config_show` 只显示 `sk-c****`，配置为 `mimo-v2.5` / `api.xiaomimimo.com`。一次真实 `ask` 完成 TLS 1.2（约 580 ms）、HTTP 200，并返回唯一短语 `homemind-mimo-ok`。
+- **重启持久化已完成**：硬复位后等待网络稳定，`net_status` 仍为 `192.168.31.248`，`config_show` 仍显示 MiMo 配置；未重新输入 key 的 `ask` 完成 TLS 1.2、HTTP 200，并返回 `homemind-mimo-restart-ok`。
+- **当前边界（修复前基线）**：完整 key 未写入仓库、状态文档或日志；本次新构建已通过 LED 开/关快速路径，冷启动 5/5 与受控重连 3/3 已通过；标准短回复长稳修复前为 6/10 在 75 秒内完成 HTTP 200 与最终 Agent 回复，4/10 未完成请求，且 10/10 轮最终网络/IP 均正常。2026-09-01 已完成 TLS body framing/stale socket 修复并得到 7/7 新轮次通过，长稳门禁待补足。
+
+**下一步**：① 补足修复版标准自然语言长稳 10 轮；② 复核受控重连、本地 LED 工具及异常路径；③ 本地提交并检查脱敏记录；④ 推送 `contest-final` 至 GitHub 远端前仍需用户确认。
+
+## 2026-08-31 连续性回归（修复前基线，未推送）
+
+- **冷启动 5/5 PASS**：每轮 esptool 硬复位后自动启动 agent；最终 `net_status` 均为 connected，DHCP IP 均为 `192.168.31.248`，MiMo TLS/HTTP 200 与唯一 token 均通过。复位后首次立即采样可能仍显示 `no/0.0.0.0`，属于 DHCP 尚未完成；问答完成后的最终采样均恢复为 `yes`。
+- **受控重连 3/3 PASS**：每轮硬复位并确认在线后执行受支持的 `wifi_reconnect`；三轮均提取到内部 `ifdown_post_scan`、DHCP 恢复、最终 connected/IP，以及 MiMo HTTP 200 与唯一 token。
+- **外部断网边界**：`ifdown wlan0` 在 `vela>` 控制台返回 `Unknown command`，因此没有把它写入当前固件的外部断网通过结论；当前 3/3 是状态机自带的受控重新关联路径验收。
+- **长稳观察（标准短回复，10 次）**：这是 2026-09-01 修复前基线：单次硬复位后，10 轮最终网络状态/IP 均正常；6/10 轮在 75 秒窗口内同时捕获 HTTP 200 和最终 Agent 回复，4/10 轮只出现工作状态，未完成 HTTP/Agent 回复。失败轮次不伴随 DHCP/IP 丢失。
+- **自定义 token 对照**：45 秒窗口的唯一 token 校验为 5/10；延长至 75 秒的 3 轮均出现 HTTP 200，但模型未稳定复述指定 token。清空 `console` 会话后请求“只回复 OK”曾返回 HTTP 200 与 `[Agent]: OK`，故该现象不能单独归因于 Wi-Fi 或串口采集。
+- 所有上述结果均来自本次干净构建 BIN `902ccdaa2109d8a2b1ecc8d5247b58d4788078eb4689e7390ee4124ec115ef56`；完整 API key、Wi-Fi 密码和 SSH 密码未进入仓库、文档或日志。
+
+**访问方式**：`python transfer/sshx.py <cmd文件> [超时秒]`，需先设置 `HOMEMIND_SSH_PASSWORD` 环境变量（密码不落盘）。已知坑：paramiko 通道静默超时会掐断长命令，长任务一律 `nohup … & echo PID` 后轮询日志；`pgrep -f` 会自匹配，结束判断看日志标记（STAGE-DONE / BUILD-ENTRY-DONE / EXTRAS-DONE）。
+
 ## 总体判断
 
-Ubuntu 主机、OpenVela 工作区、固定依赖、串口权限和服务器地址 `192.168.31.251` 均已验证可用。官方 ai_agent 基线与 HomeMind 固件可重复构建、烧录和校验。DIO 镜像封装、Wi-Fi 互斥锁死锁、同名 SSID 的最强 BSSID 选择、关联时序和 DHCP UDP 资源池问题均已处理；当前固件可锁定强 AP `50:88:11:7a:02:69`，达到 `ESSID_ON`、72 Mbps，并连续两次从冷启动流程通过 DHCP 获得 `192.168.31.249`。P0 已从 DHCP 推进到 HTTPS/TLS：`net_test` 开始访问后未在 70 秒内返回，TLS 和 MiMo 尚未验收。
+Ubuntu 主机、OpenVela 工作区、固定依赖、串口权限和服务器地址 `192.168.31.251` 均已验证可用。2026-09-01 最终修复版干净构建已烧录到 ESP32-S3-EYE：设备锁定强 AP `50:88:11:7a:02:69`，通过 DHCP 获得 `192.168.31.248`；冷启动传输链 5/5、连续自然问答 7/7 + 4/4、受控重连自然问答 3/3，以及最终标准自然语言长稳 10/10 均有通过证据。当前仅保留远程推送未执行这一项，等待用户明确要求。
 
 ## 2026-08-30 续接（小程序 BOM 修复；LCD 状态图标显示上线；C1.0 计划交付）
 
@@ -113,10 +266,12 @@ ST7789 240x240 屏此前完全空白(LVGL 未启用,qrcode 是死代码)。新�
 
 ### 队列状态
 
-- 已完成：MiMo 问答 P0 ✓、冻结竞态（诊断 printf + PSRAM 栈两案）✓、自动联网+Flash 持久化 ✓、冷启动 5/5 ✓、断网恢复 3/3 ✓、wapi show 噪音 ✓、**本地工具(LED) ✓**
+- 已完成：MiMo 问答 P0 ✓、冻结竞态（诊断 printf + PSRAM 栈两案）✓、自动联网+Flash 持久化 ✓、冷启动 5/5 ✓、受控重连 3/3 ✓、wapi show 噪音 ✓、**本地工具(LED) ✓**
 - 下一批：更多本地工具（BOOT 键 GPIO0 读取/get_device_info 等）、key/密码 flash 明文混淆（低优先级）、C0 冻结后推进 C1（腾讯云/小程序）。
 
-## 2026-08-29 下午续接（连续性验收 5/5 + 3/3 全过；wapi show 噪音清理）
+## 2026-08-29 下午续接（历史记录；非当前固件证据）
+
+> 本节保留旧现场记录。当前固件的连续性结论以 2026-08-31 上方章节为准；当时记录的 `ifdown wlan0` 入口不适用于当前 `vela>` 控制台。
 
 ### DHCP 冷启动 5/5 与断网恢复 3/3 —— 全部通过
 
@@ -379,15 +534,13 @@ ST7789 240x240 屏此前完全空白(LVGL 未启用,qrcode 是死代码)。新�
 28. 验证入口明确：`nsh>` 下执行 `ai_agent` 进入 `vela>` 控制台；`set_wifi <ssid> <pw>` 关联、`net_test [host] [port]` 触发 TLS、`ask <text>` 调 MiMo；Wi-Fi 凭据在 TMPFS，每次重启/烧录后需重新 `set_wifi`；
 29. Windows 侧自动化文件集中在本地私有工作目录：SSH 凭据必须通过环境变量或密钥提供，不得写入参赛仓；串口会话脚本通过 RTS 硬复位后执行交互验收。
 
-## 下一主问题：HTTPS/TLS 与 Wi-Fi 连续性验收
+## 下一主问题：修复版长稳补足与异常路径回归
 
 当前剩余风险：
 
-1. agent 内 DHCP 仍不稳定；NSH 先 DHCP、后启动 agent 的顺序可稳定联网，但不是最终自动联网方案；
-2. 当前以固定 2 秒进入 DHCP；关联判定仍应改为基于 ESSID flag、BSSID、速率或信号的真实状态；
-3. `wapi show` 在成功打印关联信息后仍返回 -1，需要定位是哪一个非关键查询失败并避免误报；
-4. 当前 `/data` 是 TMPFS，Wi-Fi 凭据重启后会丢失，不能算自动联网完成；
-5. DNS 和 TCP 已验证，当前阻塞点是 TLS ClientHello/ServerHello 数据路径及约 90 秒的阻塞式握手超时。
+1. 修复版已完成干净构建、烧录、冷启动传输链 5/5、连续自然问答 7/7 + 4/4、受控重连 3/3；完整长稳门禁仍待补足；
+2. 设备 Flash 中已保存用户提供的 MiMo key，提交物和日志不含完整 key；后续应按需要轮换设备侧凭据；
+3. 当前本地官方仓已提交 TLS 修复为 `c79a240`；本轮新增回归记录待再提交，远程仍未推送。
 
 ## 尚未完成
 
@@ -395,12 +548,12 @@ ST7789 240x240 屏此前完全空白(LVGL 未启用,qrcode 是死代码)。新�
 | --- | --- | --- |
 | 官方 ai_agent 基线构建 | 已通过 | 固定版本在恢复后的 Ubuntu 工作区成功构建并保存哈希 |
 | HomeMind 构建/烧录 | 已通过基础门禁 | DIO 产物哈希通过，新固件稳定启动且 PSK 日志脱敏 |
-| Wi-Fi 关联与 DHCP | 根因已定位（argv 缺 `"renew"`），staging 已修复，**待端到端验证** | 烧录后 `set_wifi` + 自动 DHCP 拿到 IP，补足冷启动 5/5、断网恢复 3/3 |
-| HTTPS/TLS | 熵源修复生效（psa_init 通过），net_test 曾卡 ENETUNREACH（DHCP 层），DHCP 修复待验证 | `net_test` 出现 `[HM-TLS] Handshake OK` + `HTTP Status` |
-| MiMo 文本问答 | 未验收 | 一次真实非流式 `ask` 成功 |
-| Flash 持久化 | 仅方案 | 断电后 Wi-Fi/LLM 配置保留 |
-| HomeMind 本地工具 | 仅源码草案 | 工具进入 ELF、注册并控制确认过的 LED |
-| 自动测试和真实日志 | 缺失 | 构建、串口、重启和异常测试记录齐全 |
+| Wi-Fi 关联与 DHCP | 单轮、重启后凭据、冷启动 5/5 与受控重连 3/3 通过；外部 `ifdown` 不适用于当前 `vela>` 入口 | 更稳健串口采集器与外部断网测试入口 |
+| HTTPS/TLS | 已通过：`www.baidu.com:443` 两次完整 TLS 1.2 + HTTP 200 | `net_test` 出现 `[HM-TLS] Handshake OK` + `HTTP Status` |
+| MiMo 文本问答 | 已通过：首次配置和重启后各一次真实非流式 `ask`，均 HTTP 200 | 一次真实非流式 `ask` 成功 |
+| Flash 持久化 | Wi-Fi 与 LLM 配置在硬复位后均恢复，重启后 `ask` 通过 | 断电/重启后 Wi-Fi/LLM 配置保留 |
+| HomeMind 本地工具 | 新构建已通过 LED 开/关快速路径 | 工具进入 ELF、注册并控制确认过的 LED |
+| 自动测试和真实日志 | 修复前基线 6/10；修复版自然问答已有 7/7 + 4/4 PASS，受控重连 3/3 PASS，冷启动传输链 5/5 无超时；另有直接续跑 3/3 未捕获 HTTP 状态行 | 完成最终长稳门禁，复核异常采集并提交 |
 
 ## 开发环境
 
@@ -412,13 +565,11 @@ ST7789 240x240 屏此前完全空白(LVGL 未启用,qrcode 是死代码)。新�
 
 ## 下一执行队列
 
-1. （DHCP argv 根因已修，staging 已部署）烧录后验证 agent 内自动 DHCP 拿到 IP；若仍不稳，再将 Wi-Fi/DHCP 初始化前移到 agent 后台网络消费者启动之前；
-2. 给 TLS socket 增加真正生效的握手读超时，并用驱动/路由器侧抓包确认 ClientHello 与 ServerHello；
-3. TLS 成功后进行一次真实 MiMo 非流式问答；
+1. 复核或重跑最终标准自然语言长稳 10 轮，明确处理直接续跑的 HTTP 状态采集缺失；
+2. 复核 TLS body framing、异常响应和重复请求路径的串口日志；
+3. 提交本轮回归记录并保留远程 push；
 4. 将固定关联等待替换为真实关联状态判断，并处理 `wapi show` 成功打印后仍返回 -1 的非关键查询错误；
-5. 补足 DHCP 冷启动 5/5、断网恢复 3/3，并验证凭据保存；
-6. 将当前 TMPFS 配置存储替换为真实掉电持久化；
-7. 注册并验证 HomeMind 本地工具；
-8. C0 冻结后按工作区总体计划推进腾讯云/小程序 C1。
+5. 将当前 TMPFS 配置存储替换为真实掉电持久化；
+6. C0 冻结后按工作区总体计划推进腾讯云/小程序 C1。
 
 详细迁移步骤见 [MIGRATION_UBUNTU.md](MIGRATION_UBUNTU.md)。
