@@ -3,11 +3,20 @@
 > 整理时间：2026-09-06（当前事实截止 2026-09-06）
 > 目标：ESP32-S3-EYE 独立运行 OpenVela/ai_agent，自动联网，直接调用 MiMo，并安全执行最小本地工具。
 
+## 2026-09-06 C1 小程序闭环收口（模拟器 + 实体自动同步 + 域名登记）
+
+- **实体自动同步闭环通过（用户确认）**：微信开发者工具设备页自动显示"阳台开关"实体行（网关→云端→小程序），开/关/查状态可用；云端部署由 workbuddy 完成（5 文件 byte-identical、DB 备份、镜像重建、health/列/secret 检查全过）。至此 C1 链路：小程序登录 → 设备绑定 → 命令 queued→acked→done → LED（板载）与 mihome（阳台灯物理动作）双执行路径均闭环。
+- **微信公众平台域名已登记（用户确认）**：`hfy-ai.cloud` 已配置；手机真机预览回归待执行（真机证据仍缺）。
+- **剩余边界**：真机预览回归、演示视频、实物照片、技术报告定稿、官方仓 push/PR/merge、提交压缩包（截止 2026-09-20）。
+
 ## 2026-09-06 米家实体自动同步实施（网关侧已实测；云端待 workbuddy 部署）
 
 - **动因**：用户指出设备页手填实体 ID 不合理且应显示"阳台开关"名称。已改为自动同步：网关从 HA 读取白名单实体的 friendly_name 与状态，随 status 上报；云端存库并经 `GET /v1/devices` 与 WSS 下发；小程序自动渲染实体行（名称+状态+开/关/查状态），手填降级为网关离线兜底。
 - **网关侧已实测**：`list_entities()` + `_clean_name()`（"阳台开关 开关 开关"→"阳台开关"）已部署家庭网关；实测 status 消息含 `mihome_entities=[{entity_id, name:"阳台开关", state:"on"}]`，配套 `mihome.get_state` 命令 `acked → done`。
-- **云端代码就绪待部署**：models/db/main/mqtt_client/devices 5 个文件（含 SQLite 轻量迁移），步骤与验收见 `docs/2026-09-06_腾讯云workbuddy操作清单2-米家实体同步部署.md`。
+- **云端已部署（workbuddy，2026-09-06）**：5 个后端文件 byte-identical 覆盖、DB 备份、镜像重建、health/DB 列/secret 日志检查全过（详见用户回报与清单 2）。部署后已实测触发 `mihome.get_state` → 网关 status 快照（`name:"阳台开关", state:"off"`）→ 云端入库/WSS 链路激活。
+- **待用户**：微信开发者工具重新编译设备页，确认"米家设备控制"卡片自动显示"阳台开关（关）"实体行；点"开"应恢复灯光并显示"已开启（网关回读确认）"。
+- **验收设备更换（用户指定）**：米家白名单从阳台开关换为**多功能房吸顶灯** `light.leishi_cn_940744854_eps127_s_2_light`（雷士 eps127 主灯，不含氛围灯）；直连适配器开/关回读均确认，`_clean_name` 正确输出"多功能房吸顶灯"。`.env` 同时预置 `HOMEMIND_SPEAK_ENTITY=notify.xiaomi_cn_2085562629_lx06_play_text_a_5_1`（多功能房小爱音箱 Pro"播放文本"，为语音回复链路做准备）。网关服务重启待摄像头固件子代理完成串口测试后生效。
+- **语音回复方案确定**：设备无扬声器且 S3 无经典蓝牙；回复改走多功能房小爱音箱 Pro（HA notify.play_text）。链路：设备录音→mimo-v2.5-asr→ask 管线→回答文本 POST 云端 `/v1/media/announce`（待 workbuddy）→MQTT speak→网关→HA→音箱播报。
 - **旧副本归档**：`contest2026_138_HomeMind/` 整体移入 `_archive/contest2026_138_HomeMind_20260906/`（用户确认 official 为正式版后；移动非删除，可恢复）。`README_WORKSPACE.md` 已同步。
 - 证据见 `docs/evidence/2026-09-06_mihome_entity_sync.md`。
 
