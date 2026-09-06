@@ -14,6 +14,9 @@ import threading
 import logging
 import paho.mqtt.client as mqtt
 
+from command_policy import CommandPolicy
+from mihome_adapter import HomeAssistantMiHomeAdapter
+
 try:
     import serial
 except ImportError:
@@ -66,7 +69,11 @@ ASK_MAP = {
     "led.off": "关灯",
     "device.info": "上报设备信息",
 }
+MIHOME_ACTIONS = {"mihome.set_power", "mihome.get_state"}
 LED_DESIRED = {"led.on": "on", "led.off": "off"}
+COMMAND_POLICY = CommandPolicy(
+    tuple(ASK_MAP.keys()) + tuple(MIHOME_ACTIONS), max_ttl=max(CMD_TTL, 300)
+)
 
 
 class SerialExecutor:
@@ -116,8 +123,6 @@ class SerialExecutor:
             self.ser.reset_input_buffer()
             self.ser.write(line.encode())
             out = self._read_until_prompt(timeout=timeout)
-            if action in LED_DESIRED:
-                self.led_state = LED_DESIRED[action]
             return out
 
     def close(self):
@@ -129,6 +134,7 @@ class SerialExecutor:
 
 
 def main():
+    mihome = HomeAssistantMiHomeAdapter.from_env()
     executor = None
     try:
         executor = SerialExecutor(SERIAL_PORT, BAUD, PROMPT, ENTER_CMD)
@@ -153,7 +159,8 @@ def main():
             cli.subscribe(TOPIC_CMD)
             logger.info("已连接 MQTT 并订阅 %s", TOPIC_CMD)
             cli.publish(TOPIC_STATUS, json.dumps({"online": True,
-                        "led": executor.led_state if executor else "unknown"}), qos=1)
+                        "led": executor.led_state if executor else "unknown",
+                        "mihome": mihome.describe()}), qos=1)
         else:
             logger.error("MQTT 连接失败 rc=%s", rc)
 
@@ -162,26 +169,55 @@ def main():
             payload = json.loads(msg.payload.decode())
         except Exception:
             return
-        cid = payload.get("command_id")
-        action = payload.get("action")
-        if not cid or not action:
+        decision = COMMAND_POLICY.claim(payload)
+        cid = payload.get("command_id") if isinstance(payload, dict) else None
+        if not decision.accepted:
+            if decision.reason == "duplicate" and cid:
+                status = decision.status if decision.status in {"acked", "done", "expired"} else "acked"
+                cli.publish(TOPIC_ACK, json.dumps({"command_id": cid, "status": status}), qos=1)
+            elif isinstance(cid, str) and cid:
+                cli.publish(TOPIC_ACK, json.dumps({"command_id": cid, "status": "expired"}), qos=1)
+            logger.warning("拒绝命令 %s: %s", cid or "<missing>", decision.reason)
             return
+        action = payload["action"]
         logger.info("收到命令 %s -> %s", cid, action)
         # 立即回 acked（已接收，且绝不在 MQTT 回调里做阻塞 IO）
         cli.publish(TOPIC_ACK, json.dumps({"command_id": cid, "status": "acked"}), qos=1)
+        COMMAND_POLICY.update(cid, "acked")
 
         # 把串口执行放到独立线程：避免阻塞 MQTT 网络循环（否则会饿死 keepalive、
         # 导致连接掉线重连，且 acked/done 要等串口超时才能发出）。
         def _handle():
-            if executor is None:
-                cli.publish(TOPIC_ACK, json.dumps({"command_id": cid, "status": "expired"}), qos=1)
-                return
             try:
-                executor.exec(action, timeout=max(5, CMD_TTL - 5))
+                ttl = int(payload["ttl"])
+                if action in MIHOME_ACTIONS:
+                    result = mihome.execute(action, payload.get("params"))
+                    output = json.dumps(result)
+                else:
+                    if executor is None:
+                        raise RuntimeError("serial executor unavailable")
+                    result = None
+                    output = executor.exec(action, timeout=max(2, min(CMD_TTL, ttl)))
+                lowered = output.lower()
+                if any(marker in lowered for marker in ("unknown command", "error:", "failed", "timeout")):
+                    raise RuntimeError("device reported command failure")
+                if time.time() - float(payload["ts"]) > ttl:
+                    raise RuntimeError("command expired during execution")
+                if action in LED_DESIRED and f'"led":"{LED_DESIRED[action]}"' not in output.replace(" ", ""):
+                    raise RuntimeError("device did not confirm requested LED state")
+                if action in LED_DESIRED:
+                    executor.led_state = LED_DESIRED[action]
+                COMMAND_POLICY.update(cid, "done")
                 cli.publish(TOPIC_ACK, json.dumps({"command_id": cid, "status": "done"}), qos=1)
-                cli.publish(TOPIC_STATUS, json.dumps({"online": True, "led": executor.led_state}), qos=1)
+                status = {"online": True,
+                          "led": executor.led_state if executor else "unknown",
+                          "mihome": mihome.describe()}
+                if result is not None:
+                    status["mihome_result"] = result
+                cli.publish(TOPIC_STATUS, json.dumps(status), qos=1)
             except Exception as e:
                 logger.error("执行命令 %s 失败：%s", cid, e)
+                COMMAND_POLICY.update(cid, "expired")
                 cli.publish(TOPIC_ACK, json.dumps({"command_id": cid, "status": "expired"}), qos=1)
 
         threading.Thread(target=_handle, daemon=True).start()
