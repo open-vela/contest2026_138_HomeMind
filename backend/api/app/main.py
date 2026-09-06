@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .db import engine, SessionLocal
+from .db import engine, SessionLocal, ensure_sqlite_columns
 from . import models
 from .mqtt_client import start_mqtt
 from .ws_hub import init as ws_init, drain
@@ -14,9 +14,15 @@ from .models import Command
 from .routers import health, auth, devices, commands, ws as ws_router
 
 logging.basicConfig(level=logging.INFO)
+# httpx/httpcore 在 INFO 级会打印完整请求 URL，而微信 jscode2session 把 AppSecret
+# 放在 query string 里（?...&secret=xxx）——必须压到 WARNING，否则 AppSecret 明文落日志。
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 logger = logging.getLogger("api")
 
 models.Base.metadata.create_all(bind=engine)
+ensure_sqlite_columns()
 
 
 async def expire_sweeper():
@@ -55,7 +61,7 @@ if settings.CORS_ORIGINS:
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
         allow_credentials=True,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
 app.include_router(health.router)

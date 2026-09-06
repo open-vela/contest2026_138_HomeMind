@@ -94,7 +94,7 @@ def on_message(cli, userdata, msg):
                 elif st == "done" and cmd.status in ("queued", "acked"):
                     cmd.status = "done"
                     cmd.done_at = datetime.utcnow()
-                elif st == "expired":
+                elif st == "expired" and cmd.status in ("queued", "acked"):
                     cmd.status = "expired"
                 new_status = cmd.status
                 db.commit()
@@ -107,9 +107,16 @@ def on_message(cli, userdata, msg):
             led = payload.get("led")
             online = payload.get("online", True)
             _upsert_status(db, device_id, online=bool(online), led=led)
+            # 网关上报的米家实体快照（含 friendly_name 与当前状态）；仅接受列表
+            mi = payload.get("mihome_entities")
+            if isinstance(mi, list):
+                st = db.query(DeviceStatus).filter_by(device_id=device_id).first()
+                if st is not None:
+                    st.mihome_entities = json.dumps(mi, ensure_ascii=False)
             db.commit()
             push_event({"type": "status", "device_id": device_id,
-                        "online": bool(online), "led": led})
+                        "online": bool(online), "led": led,
+                        "mihome_entities": mi if isinstance(mi, list) else None})
     except Exception as e:
         logger.error("on_message error: %s", e)
     finally:

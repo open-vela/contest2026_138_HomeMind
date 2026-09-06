@@ -160,7 +160,8 @@ def main():
             logger.info("已连接 MQTT 并订阅 %s", TOPIC_CMD)
             cli.publish(TOPIC_STATUS, json.dumps({"online": True,
                         "led": executor.led_state if executor else "unknown",
-                        "mihome": mihome.describe()}), qos=1)
+                        "mihome": mihome.describe(),
+                        "mihome_entities": mihome.list_entities()}), qos=1)
         else:
             logger.error("MQTT 连接失败 rc=%s", rc)
 
@@ -211,7 +212,8 @@ def main():
                 cli.publish(TOPIC_ACK, json.dumps({"command_id": cid, "status": "done"}), qos=1)
                 status = {"online": True,
                           "led": executor.led_state if executor else "unknown",
-                          "mihome": mihome.describe()}
+                          "mihome": mihome.describe(),
+                          "mihome_entities": mihome.list_entities()}
                 if result is not None:
                     status["mihome_result"] = result
                 cli.publish(TOPIC_STATUS, json.dumps(status), qos=1)

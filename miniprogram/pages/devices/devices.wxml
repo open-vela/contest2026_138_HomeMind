@@ -39,24 +39,53 @@
 
   <view class="card" wx:if="{{devices.length > 0}}">
     <view class="card-title">米家设备控制</view>
-    <view class="form-item">
-      <view class="form-label">实体 ID（仅网关白名单内的 light.*/switch.*）</view>
-      <input class="form-input" placeholder="如 switch.linp_cn_xxx_on_p_2_1" value="{{mihomeEntity}}" bindinput="onMihomeEntityInput" />
-    </view>
-    <view class="mihome-row" wx:for="{{devices}}" wx:key="id">
-      <view class="mihome-device">{{item.name}}</view>
-      <view class="mihome-actions">
-        <view class="action-btn mihome-on {{mihomePending[item.id] ? 'disabled' : ''}}"
-              bindtap="mihomeAction" data-id="{{item.id}}" data-kind="on">开</view>
-        <view class="action-btn mihome-off {{mihomePending[item.id] ? 'disabled' : ''}}"
-              bindtap="mihomeAction" data-id="{{item.id}}" data-kind="off">关</view>
-        <view class="action-btn mihome-query {{mihomePending[item.id] ? 'disabled' : ''}}"
-              bindtap="mihomeAction" data-id="{{item.id}}" data-kind="query">查状态</view>
-      </view>
-      <view class="mihome-result {{mihomeResult[item.id].ok ? 'ok' : 'bad'}}" wx:if="{{mihomeResult[item.id]}}">
-        {{mihomeResult[item.id].text}}
-      </view>
-    </view>
+
+    <block wx:for="{{devices}}" wx:for-item="dev" wx:key="id">
+      <!-- 自动同步实体：网关上报（含 friendly_name，如"阳台开关"） -->
+      <block wx:if="{{dev.mihome_entities.length > 0}}">
+        <view class="mihome-row" wx:for="{{dev.mihome_entities}}" wx:for-item="ent" wx:for-index="ei" wx:key="entity_id">
+          <view class="mihome-device">
+            {{ent.name}}
+            <text class="mihome-state {{ent.state === 'on' ? 'on' : ''}}">（{{ent.state === 'on' ? '开' : ent.state === 'off' ? '关' : ent.state || '未知'}}）</text>
+          </view>
+          <view class="mihome-actions">
+            <view class="action-btn mihome-on {{mihomePending[dev.id + '|' + ent.entity_id] ? 'disabled' : ''}}"
+                  bindtap="mihomeAction" data-id="{{dev.id}}" data-entity="{{ent.entity_id}}" data-kind="on">开</view>
+            <view class="action-btn mihome-off {{mihomePending[dev.id + '|' + ent.entity_id] ? 'disabled' : ''}}"
+                  bindtap="mihomeAction" data-id="{{dev.id}}" data-entity="{{ent.entity_id}}" data-kind="off">关</view>
+            <view class="action-btn mihome-query {{mihomePending[dev.id + '|' + ent.entity_id] ? 'disabled' : ''}}"
+                  bindtap="mihomeAction" data-id="{{dev.id}}" data-entity="{{ent.entity_id}}" data-kind="query">查状态</view>
+          </view>
+          <view class="mihome-result {{mihomeResult[dev.id + '|' + ent.entity_id].ok ? 'ok' : 'bad'}}"
+                wx:if="{{mihomeResult[dev.id + '|' + ent.entity_id]}}">
+            {{mihomeResult[dev.id + '|' + ent.entity_id].text}}
+          </view>
+        </view>
+      </block>
+
+      <!-- 兜底：网关离线或旧版网关未上报实体快照时手填 -->
+      <block wx:else>
+        <view class="form-item">
+          <view class="form-label">{{dev.name}}：网关实体快照暂不可用，手动输入实体 ID（light.*/switch.*）</view>
+          <input class="form-input" placeholder="如 switch.linp_cn_xxx_on_p_2_1" value="{{mihomeManual}}" bindinput="onMihomeManualInput" />
+        </view>
+        <view class="mihome-row">
+          <view class="mihome-actions">
+            <view class="action-btn mihome-on {{mihomePending[dev.id + '|' + mihomeManual] ? 'disabled' : ''}}"
+                  bindtap="mihomeAction" data-id="{{dev.id}}" data-entity="{{mihomeManual}}" data-kind="on">开</view>
+            <view class="action-btn mihome-off {{mihomePending[dev.id + '|' + mihomeManual] ? 'disabled' : ''}}"
+                  bindtap="mihomeAction" data-id="{{dev.id}}" data-entity="{{mihomeManual}}" data-kind="off">关</view>
+            <view class="action-btn mihome-query {{mihomePending[dev.id + '|' + mihomeManual] ? 'disabled' : ''}}"
+                  bindtap="mihomeAction" data-id="{{dev.id}}" data-entity="{{mihomeManual}}" data-kind="query">查状态</view>
+          </view>
+          <view class="mihome-result {{mihomeResult[dev.id + '|' + mihomeManual].ok ? 'ok' : 'bad'}}"
+                wx:if="{{mihomeResult[dev.id + '|' + mihomeManual]}}">
+            {{mihomeResult[dev.id + '|' + mihomeManual].text}}
+          </view>
+        </view>
+      </block>
+    </block>
+
     <view class="empty-hint" style="margin-top: 12rpx;">命令经云端 → 家庭网关 → Home Assistant 下发；"开/关"只在网关状态回读确认后才显示成功。</view>
   </view>
 

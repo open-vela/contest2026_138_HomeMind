@@ -50,5 +50,7 @@ class DeviceStatus(Base):
     device_id = Column(String(64), primary_key=True)
     online = Column(Boolean, default=False)
     led_state = Column(String(16), default="unknown")  # on/off/unknown
+    # 网关上报的米家实体快照：[{entity_id, name, state}] 的 JSON 字符串
+    mihome_entities = Column(Text, default="")
     last_seen = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow)
