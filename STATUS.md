@@ -3,6 +3,14 @@
 > 整理时间：2026-09-06（当前事实截止 2026-09-06）
 > 目标：ESP32-S3-EYE 独立运行 OpenVela/ai_agent，自动联网，直接调用 MiMo，并安全执行最小本地工具。
 
+## 2026-09-06 米家实体自动同步实施（网关侧已实测；云端待 workbuddy 部署）
+
+- **动因**：用户指出设备页手填实体 ID 不合理且应显示"阳台开关"名称。已改为自动同步：网关从 HA 读取白名单实体的 friendly_name 与状态，随 status 上报；云端存库并经 `GET /v1/devices` 与 WSS 下发；小程序自动渲染实体行（名称+状态+开/关/查状态），手填降级为网关离线兜底。
+- **网关侧已实测**：`list_entities()` + `_clean_name()`（"阳台开关 开关 开关"→"阳台开关"）已部署家庭网关；实测 status 消息含 `mihome_entities=[{entity_id, name:"阳台开关", state:"on"}]`，配套 `mihome.get_state` 命令 `acked → done`。
+- **云端代码就绪待部署**：models/db/main/mqtt_client/devices 5 个文件（含 SQLite 轻量迁移），步骤与验收见 `docs/2026-09-06_腾讯云workbuddy操作清单2-米家实体同步部署.md`。
+- **旧副本归档**：`contest2026_138_HomeMind/` 整体移入 `_archive/contest2026_138_HomeMind_20260906/`（用户确认 official 为正式版后；移动非删除，可恢复）。`README_WORKSPACE.md` 已同步。
+- 证据见 `docs/evidence/2026-09-06_mihome_entity_sync.md`。
+
 ## 2026-09-06 小程序 mihome 命令到实际灯光物理闭环确认（模拟器）
 
 - **物理闭环成立**：开发者工具模拟器下发 `mihome.set_power` → 云端 → 家庭网关 → HA → 领普阳台开关继电器 → **实际灯光**。用户现场确认：远端切 `off` 灯灭、切 `on` 灯亮，两个方向均物理动作，HA 回读与物理一致。

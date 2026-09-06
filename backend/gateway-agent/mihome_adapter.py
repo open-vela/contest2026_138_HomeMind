@@ -18,9 +18,13 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 # Xiaomi/MiOT entities may lag behind a service call before HA reflects the
-# new state; poll briefly instead of failing on the first read.
-_CONFIRM_WINDOW_S = 3.0
-_CONFIRM_INTERVAL_S = 0.4
+# new state; poll briefly instead of failing on the first read. BLE/cloud
+# devices (e.g. Linp wall switches) routinely take 5-8 s to apply a command,
+# and the xiaomi_home integration may even answer the service call with a 500
+# "设备操作超时" *before* the device executes it — so the service-call result is
+# never trusted on its own: state polling is the single source of truth.
+_CONFIRM_WINDOW_S = 10.0
+_CONFIRM_INTERVAL_S = 0.5
 
 
 _ENTITY_RE = re.compile(r"^(light|switch)\.[A-Za-z0-9_]+$")
@@ -133,16 +137,24 @@ class HomeAssistantMiHomeAdapter:
         entity_id = self._check_entity(entity_id)
         domain = entity_id.split(".", 1)[0]
         service = "turn_on" if enabled else "turn_off"
-        self._request(
-            "POST",
-            "/api/services/{}/{}".format(domain, service),
-            {"entity_id": entity_id},
-        )
+        # The service call itself is best-effort: HA may return 500 for slow
+        # BLE/cloud devices that still execute the command shortly after.
+        try:
+            self._request(
+                "POST",
+                "/api/services/{}/{}".format(domain, service),
+                {"entity_id": entity_id},
+            )
+        except MiHomeError:
+            pass  # fall through: state confirmation below decides success
         expected = "on" if enabled else "off"
         deadline = time.monotonic() + _CONFIRM_WINDOW_S
         while True:
-            state = self.get_state(entity_id)
-            if state.get("state") == expected:
+            try:
+                state = self.get_state(entity_id)
+            except MiHomeError:
+                state = None  # transient read failure: keep polling
+            if state and state.get("state") == expected:
                 break
             if time.monotonic() >= deadline:
                 raise MiHomeError(
@@ -162,6 +174,46 @@ class HomeAssistantMiHomeAdapter:
         if not isinstance(enabled, bool):
             raise MiHomeError("mihome.set_power requires boolean params.on")
         return self.set_power(entity_id, enabled)
+
+    @staticmethod
+    def _clean_name(raw: str, domain: str) -> str:
+        """小米集成的 friendly_name 常是"设备名 属性名 属性名"（如"阳台开关 开关 开关"）。
+
+        去掉相邻重复 token 与与实体域重复的尾部领域词，得到"阳台开关"。
+        """
+        tokens = raw.split()
+        dedup = []
+        for token in tokens:
+            if not dedup or dedup[-1] != token:
+                dedup.append(token)
+        domain_words = {"switch": ("开关", "插座"), "light": ("灯", "灯光")}
+        if len(dedup) >= 2 and dedup[-1] in domain_words.get(domain, ()):
+            dedup = dedup[:-1]
+        return " ".join(dedup) or raw.strip()
+
+    def list_entities(self) -> list:
+        """[{entity_id, name, state}] for allowlisted entities; [] when disabled.
+
+        Names come from Home Assistant friendly_name so clients can render
+        human-readable labels (e.g. 阳台开关) instead of raw entity ids.
+        """
+        if not self.enabled:
+            return []
+        out = []
+        for entity_id in sorted(self.allowed_entities):
+            domain = entity_id.split(".", 1)[0]
+            try:
+                state = self.get_state(entity_id)
+            except MiHomeError:
+                out.append({"entity_id": entity_id, "name": entity_id, "state": "unknown"})
+                continue
+            raw_name = (state.get("attributes") or {}).get("friendly_name") or entity_id
+            out.append({
+                "entity_id": entity_id,
+                "name": self._clean_name(str(raw_name), domain),
+                "state": state.get("state"),
+            })
+        return out
 
 
 __all__ = ["HomeAssistantMiHomeAdapter", "MiHomeError"]

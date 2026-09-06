@@ -3,7 +3,7 @@ const app = getApp()
 const api = require('../../utils/api.js')
 const ws = require('../../utils/ws.js')
 
-// 与网关 mihome_adapter 一致：只接受 light.*/switch.* 实体
+// 与网关 mihome_adapter 一致：只接受 light.*/switch.* 实体（手动兜底输入用）
 const MIHOME_ENTITY_RE = /^(light|switch)\.[A-Za-z0-9_]+$/
 
 Page({
@@ -13,14 +13,13 @@ Page({
     pending: {},            // device_id -> {command_id, action}（直到最终状态防重入）
     showAddModal: false,
     newDevice: { device_id: '', name: '' },
-    // 米家控制（经网关 -> Home Assistant -> 真实设备）
-    mihomeEntity: '',       // 持久化到 Storage('mihomeEntity')
-    mihomePending: {},      // device_id -> {command_id, kind}
-    mihomeResult: {}        // device_id -> {text, ok}
+    // 米家控制：实体列表由网关→云端自动同步（含 friendly_name，如"阳台开关"）
+    mihomeManual: '',       // 兜底：网关离线/旧网关没有实体快照时手填
+    mihomePending: {},      // "deviceId|entityId" -> {command_id, kind}
+    mihomeResult: {}        // "deviceId|entityId" -> {text, ok}
   },
 
   onShow() {
-    this.setData({ mihomeEntity: wx.getStorageSync('mihomeEntity') || '' })
     this.ensureAndLoad()
   },
 
@@ -50,6 +49,7 @@ Page({
           name: d.name || d.device_id,
           online: d.online,
           led_state: d.led_state || 'unknown',
+          mihome_entities: Array.isArray(d.mihome_entities) ? d.mihome_entities : [],
           last_seen: d.last_seen
         }))
         this.setData({ devices: list })
@@ -81,7 +81,7 @@ Page({
 
   stopMihomePollers() {
     const pollers = this._mihomePollers || {}
-    Object.keys(pollers).forEach((deviceId) => clearTimeout(pollers[deviceId]))
+    Object.keys(pollers).forEach((key) => clearTimeout(pollers[key]))
     this._mihomePollers = {}
   },
 
@@ -130,21 +130,27 @@ Page({
     if (msg.type === 'snapshot') {
       if (this.data.devices.length === 0 && msg.devices) this.applyDevices(msg.devices)
     } else if (msg.type === 'status') {
-      this.updateDevice(msg.device_id, { online: msg.online, led_state: msg.led })
+      const patch = { online: msg.online, led_state: msg.led }
+      if (Array.isArray(msg.mihome_entities)) {
+        patch.mihome_entities = msg.mihome_entities
+      }
+      this.updateDevice(msg.device_id, patch)
     } else if (msg.type === 'command') {
       const pending = this.data.pending
       const item = pending[msg.device_id]
       if (item && item.command_id === msg.command_id &&
           (msg.status === 'done' || msg.status === 'expired')) {
         this.finishCommand(msg.device_id, msg.command_id, item.action, msg.status)
-        return
       }
+      // mihome 命令的 WSS 回显（pending key 里含 command_id 校验）
       const mihomePending = this.data.mihomePending
-      const mi = mihomePending[msg.device_id]
-      if (mi && mi.command_id === msg.command_id &&
-          (msg.status === 'done' || msg.status === 'expired')) {
-        this.finishMihome(msg.device_id, msg.command_id, msg.status)
-      }
+      Object.keys(mihomePending).forEach((key) => {
+        const mi = mihomePending[key]
+        if (mi.command_id === msg.command_id &&
+            (msg.status === 'done' || msg.status === 'expired')) {
+          this.finishMihome(key, mi, msg.status)
+        }
+      })
     }
   },
 
@@ -153,7 +159,8 @@ Page({
       id: d.device_id,
       name: d.name || d.device_id,
       online: d.online,
-      led_state: d.led_state || 'unknown'
+      led_state: d.led_state || 'unknown',
+      mihome_entities: Array.isArray(d.mihome_entities) ? d.mihome_entities : []
     }))
     this.setData({ devices })
   },
@@ -186,17 +193,16 @@ Page({
 
   // ---------- 米家控制（云端 -> 网关 -> Home Assistant -> 真实设备） ----------
 
-  onMihomeEntityInput(e) {
-    const entity = (e.detail.value || '').trim()
-    this.setData({ mihomeEntity: entity })
-    wx.setStorageSync('mihomeEntity', entity)
+  onMihomeManualInput(e) {
+    this.setData({ mihomeManual: (e.detail.value || '').trim() })
   },
 
   mihomeAction(e) {
     const deviceId = e.currentTarget.dataset.id
-    const kind = e.currentTarget.dataset.kind  // 'on' | 'off' | 'query'
-    const entity = this.data.mihomeEntity
-    if (this.data.mihomePending[deviceId]) return
+    const kind = e.currentTarget.dataset.kind      // 'on' | 'off' | 'query'
+    const entity = e.currentTarget.dataset.entity  // 自动同步实体 或 手动兜底输入
+    const key = deviceId + '|' + entity
+    if (this.data.mihomePending[key]) return
     if (!MIHOME_ENTITY_RE.test(entity)) {
       wx.showToast({ title: '实体 ID 须为 light.* 或 switch.*', icon: 'none' })
       return
@@ -208,67 +214,82 @@ Page({
     api.sendCommand(deviceId, action, params).then((res) => {
       if (res.statusCode === 200) {
         const mihomePending = Object.assign({}, this.data.mihomePending)
-        mihomePending[deviceId] = { command_id: res.data.command_id, kind: kind }
+        mihomePending[key] = { command_id: res.data.command_id, kind: kind, entity: entity }
         this.setData({ mihomePending })
-        this.setMihomeResult(deviceId, '执行中…', null)
-        this.watchMihome(deviceId, res.data.command_id, 0)
+        this.setMihomeResult(key, '执行中…', null)
+        this.watchMihome(key, res.data.command_id, 0)
       } else {
         const detail = (res.data && res.data.detail) ? String(res.data.detail) : ('HTTP ' + res.statusCode)
-        this.setMihomeResult(deviceId, '下发被拒: ' + detail, false)
+        this.setMihomeResult(key, '下发被拒: ' + detail, false)
       }
     }).catch((err) => {
-      this.setMihomeResult(deviceId, '下发失败: ' + err.message, false)
+      this.setMihomeResult(key, '下发失败: ' + err.message, false)
     })
   },
 
-  watchMihome(deviceId, commandId, attempt) {
+  watchMihome(key, commandId, attempt) {
     const maxAttempts = 20
     api.getCommand(commandId).then((res) => {
       const command = res.data || {}
       if (command.status === 'done' || command.status === 'expired') {
-        this.finishMihome(deviceId, commandId, command.status)
+        this.finishMihome(key, this.data.mihomePending[key], command.status)
         return
       }
       if (attempt >= maxAttempts) {
-        this.finishMihome(deviceId, commandId, 'expired')
+        this.finishMihome(key, this.data.mihomePending[key], 'expired')
         return
       }
       this._mihomePollers = this._mihomePollers || {}
-      this._mihomePollers[deviceId] = setTimeout(
-        () => this.watchMihome(deviceId, commandId, attempt + 1), 1500)
+      this._mihomePollers[key] = setTimeout(
+        () => this.watchMihome(key, commandId, attempt + 1), 1500)
     }).catch(() => {
       if (attempt >= maxAttempts) {
-        this.finishMihome(deviceId, commandId, 'expired')
+        this.finishMihome(key, this.data.mihomePending[key], 'expired')
         return
       }
       this._mihomePollers = this._mihomePollers || {}
-      this._mihomePollers[deviceId] = setTimeout(
-        () => this.watchMihome(deviceId, commandId, attempt + 1), 1500)
+      this._mihomePollers[key] = setTimeout(
+        () => this.watchMihome(key, commandId, attempt + 1), 1500)
     })
   },
 
-  finishMihome(deviceId, commandId, status) {
+  finishMihome(key, mi, status) {
+    if (!mi) return
     const mihomePending = this.data.mihomePending
-    const mi = mihomePending[deviceId]
-    if (!mi || mi.command_id !== commandId) return
+    if (!mihomePending[key] || mihomePending[key].command_id !== mi.command_id) return
     const np = Object.assign({}, mihomePending)
-    delete np[deviceId]
+    delete np[key]
     this.setData({ mihomePending: np })
     const kind = mi.kind
     if (status === 'done') {
       // 网关只在实体状态回读确认后才发 done
       const text = kind === 'on' ? '已开启（网关回读确认）'
         : kind === 'off' ? '已关闭（网关回读确认）'
-        : '状态查询完成（结果见网关）'
-      this.setMihomeResult(deviceId, text, true)
+        : '状态查询完成'
+      this.setMihomeResult(key, text, true)
+      if (kind === 'on' || kind === 'off') {
+        this.updateEntityState(key.split('|')[0], mi.entity, kind)
+      }
     } else {
-      this.setMihomeResult(deviceId, '未确认（超时、TTL 过期或状态回读不匹配）', false)
+      this.setMihomeResult(key, '未确认（超时、TTL 过期或状态回读不匹配）', false)
     }
   },
 
-  setMihomeResult(deviceId, text, ok) {
+  // 命令确认后把本地实体状态同步为最新（正式快照以网关 status 上报为准）
+  updateEntityState(deviceId, entityId, state) {
+    const devices = this.data.devices.map((d) => {
+      if (d.id !== deviceId || !Array.isArray(d.mihome_entities)) return d
+      return Object.assign({}, d, {
+        mihome_entities: d.mihome_entities.map((ent) =>
+          ent.entity_id === entityId ? Object.assign({}, ent, { state: state }) : ent)
+      })
+    })
+    this.setData({ devices })
+  },
+
+  setMihomeResult(key, text, ok) {
     const mihomeResult = Object.assign({}, this.data.mihomeResult)
-    mihomeResult[deviceId] = { text: text, ok: ok }
+    mihomeResult[key] = { text: text, ok: ok }
     this.setData({ mihomeResult })
   },
 

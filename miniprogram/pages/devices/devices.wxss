@@ -127,6 +127,16 @@
   font-weight: 500;
 }
 
+.mihome-state {
+  font-size: 24rpx;
+  color: #999999;
+  font-weight: 400;
+}
+
+.mihome-state.on {
+  color: #52C41A;
+}
+
 .mihome-actions {
   display: flex;
   gap: 12rpx;
