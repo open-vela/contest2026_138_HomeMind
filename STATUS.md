@@ -3,6 +3,27 @@
 > 整理时间：2026-09-06（当前事实截止 2026-09-06）
 > 目标：ESP32-S3-EYE 独立运行 OpenVela/ai_agent，自动联网，直接调用 MiMo，并安全执行最小本地工具。
 
+## 2026-09-06 小程序 mihome 命令到实际灯光物理闭环确认（模拟器）
+
+- **物理闭环成立**：开发者工具模拟器下发 `mihome.set_power` → 云端 → 家庭网关 → HA → 领普阳台开关继电器 → **实际灯光**。用户现场确认：远端切 `off` 灯灭、切 `on` 灯亮，两个方向均物理动作，HA 回读与物理一致。
+- 云端 `ALLOWED_ACTIONS` 含 mihome 动作已间接确认生效（workbuddy 完成）。
+- 小程序侧新增米家控制卡片与登录 401 自愈（见下节），本轮实测通过；命令状态 `queued → acked → done` 回显正常。
+- 边界：本轮在**模拟器**完成；手机真机预览与微信公众平台服务器域名登记（request/socket `hfy-ai.cloud`）仍待执行。证据见 `docs/evidence/2026-09-06_miniprogram_mihome_physical.md`。
+
+## 2026-09-06 小程序 mihome 控制卡片与登录 401 自愈（Win11 本地，未推送）
+
+- **设备页新增"米家设备控制"卡片**：实体 ID 输入（持久化 Storage，客户端校验 `^(light|switch)\.[A-Za-z0-9_]+$`，与网关适配器白名单规则一致）+ 每设备 开/关/查状态按钮；命令为 `mihome.set_power`（`params:{entity_id,on}`）与 `mihome.get_state`，复用 queued→acked→done/expired 轮询与 WSS 回显链路。因网关只在实体状态回读确认后才发 `done`，UI 显示"已开启/已关闭（网关回读确认）"；`mihome_result` 明细暂不回传小程序（云端 status 事件未透传，属后续增强）。
+- **模拟器不走登录的根因与修复**：`utils/api.js` 的 `login()` 在 Storage 缓存旧 `accessToken` 时直接短路（开发者工具 Storage 跨编译保留），导致 `wx.login` 不再执行；且 401 无自愈路径。已改为：`request` 收到 401 时清除缓存 token；新增 `authRequest` 包装 401 → 强制重登一次再重试；`login(force)` 支持强制重登。设备页加载/命令/查询全部走 `authRequest`。
+- esprima JS 语法与 JSON 校验通过；改动文件：`utils/api.js`、`pages/devices/devices.js|.wxml|.wxss`。云端 `ALLOWED_ACTIONS` 扩展由 workbuddy 完成，待真机实测验证。
+
+## 2026-09-06 小程序真机准备与云端微信登录复核
+
+- **云端微信登录已配好**（公网只读验证）：`POST /v1/auth/wechat/login` 用假 code 返回 `401 wechat auth failed: invalid code`，证明后端已带有效 AppID/AppSecret 调通微信 jscode2session；`/v1/health` 正常。云端 `.env` 中 AppID 为 `wx75312eb43495775f`（用户确认）。
+- **域名结论**：`api.hfy-ai.cloud` 虽解析到同一 IP 但 TLS 证书不覆盖该子域；小程序 `app.js` 与微信后台登记均使用主域 `hfy-ai.cloud`（HTTPS/WSS 443），不需要为子域配证书。
+- **小程序侧就绪**：`project.config.json` 已填真实 AppID；API 基址 `https://hfy-ai.cloud`；设备页支持 wx.login、设备列表、`led.on/off` 命令、WSS+轮询回显与失败 toast。mihome 动作尚未接入小程序 UI（不阻塞本轮真机验收）。
+- **待云端一项**：`docker-compose.yml` 的 `ALLOWED_ACTIONS` 默认值不含 mihome 动作，需 workbuddy 在云端 `.env` 加上并重建 api 容器（详见 [2026-09-06_腾讯云workbuddy操作清单.md](docs/2026-09-06_腾讯云workbuddy操作清单.md)）。
+- **待用户**：微信公众平台（mp.weixin.qq.com）→ 开发设置 → 服务器域名：request 域名加 `https://hfy-ai.cloud`，socket 域名加 `wss://hfy-ai.cloud`；之后微信开发者工具真机预览验收登录/绑定/命令/失败回显。
+
 ## 2026-09-06 真实米家设备开关闭环验收通过（本地完成，未推送）
 
 - **设备**：公望府 阳台"阳台开关"（`linp_cn_950233435_t2dbw1`，实体 `switch.linp_cn_950233435_t2dbw1_on_p_2_1`），白名单仅此一个实体。链路：MQTT TLS → 家庭网关 → `mihome_adapter.py` → Home Assistant REST → Xiaomi Home 集成 → 真实设备。

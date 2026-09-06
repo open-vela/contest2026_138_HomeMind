@@ -114,6 +114,56 @@
   color: #999999;
 }
 
+/* 米家控制卡片 */
+.mihome-row {
+  padding: 16rpx 0;
+  border-bottom: 1rpx solid #F0F0F0;
+}
+
+.mihome-device {
+  font-size: 28rpx;
+  color: #333333;
+  margin-bottom: 10rpx;
+  font-weight: 500;
+}
+
+.mihome-actions {
+  display: flex;
+  gap: 12rpx;
+}
+
+.action-btn.mihome-on {
+  background-color: #52C41A;
+  color: #ffffff;
+}
+
+.action-btn.mihome-off {
+  background-color: #8C8C8C;
+  color: #ffffff;
+}
+
+.action-btn.mihome-query {
+  background-color: #F0F5FF;
+  color: #4A90E2;
+}
+
+.action-btn.disabled {
+  opacity: 0.5;
+}
+
+.mihome-result {
+  margin-top: 10rpx;
+  font-size: 24rpx;
+}
+
+.mihome-result.ok {
+  color: #52C41A;
+}
+
+.mihome-result.bad {
+  color: #FF4D4F;
+}
+
 /* 弹窗样式 */
 .modal {
   position: fixed;
