@@ -12,13 +12,17 @@ function authHeader() {
 
 function request(method, path, data) {
   return new Promise((resolve, reject) => {
+    const hadToken = !!wx.getStorageSync('accessToken')
     wx.request({
       url: baseUrl() + path,
       method: method,
       data: data,
       header: Object.assign({ 'content-type': 'application/json' }, authHeader()),
       success: (res) => {
-        if (res.statusCode === 401) {
+        if (res.statusCode === 401 && hadToken) {
+          // 缓存 token 失效（过期/后端密钥变更/换后端）：立即清除，
+          // 让带鉴权的调用走强制重登路径，而不是永远拿着旧 token。
+          wx.removeStorageSync('accessToken')
           reject(new Error('unauthorized'))
           return
         }
@@ -39,8 +43,12 @@ function wxLogin() {
 }
 
 // 小程序登录：wx.login -> /v1/auth/wechat/login -> 存 token
-async function login() {
-  if (wx.getStorageSync('accessToken')) return wx.getStorageSync('accessToken')
+// force=true 时忽略缓存 token 强制重登（401 自愈用）
+async function login(force) {
+  if (!force) {
+    const saved = wx.getStorageSync('accessToken')
+    if (saved) return saved
+  }
   const code = await wxLogin()
   const res = await request('POST', '/v1/auth/wechat/login', { code: code })
   if (res.statusCode !== 200) {
@@ -52,19 +60,33 @@ async function login() {
   return d.access_token
 }
 
+// 带鉴权请求：401 时强制重登一次再试（处理缓存 token 失效/后端密钥变更）
+async function authRequest(method, path, data) {
+  await login()
+  try {
+    return await request(method, path, data)
+  } catch (e) {
+    if (e && e.message === 'unauthorized') {
+      await login(true)
+      return request(method, path, data)
+    }
+    throw e
+  }
+}
+
 function getDevices() {
-  return request('GET', '/v1/devices')
+  return authRequest('GET', '/v1/devices')
 }
 
 function sendCommand(deviceId, action, params) {
-  return request('POST', '/v1/devices/' + deviceId + '/commands', {
+  return authRequest('POST', '/v1/devices/' + deviceId + '/commands', {
     action: action,
     params: params || {}
   })
 }
 
 function getCommand(commandId) {
-  return request('GET', '/v1/commands/' + commandId)
+  return authRequest('GET', '/v1/commands/' + commandId)
 }
 
-module.exports = { login, wxLogin, getDevices, sendCommand, getCommand, request, baseUrl }
+module.exports = { login, wxLogin, getDevices, sendCommand, getCommand, request, authRequest, baseUrl }
