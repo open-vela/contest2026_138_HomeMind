@@ -55,7 +55,8 @@
 - **迁移前置备份完成**：/home/hfy/backups/2026-09-07-migration-pre/（网关 .env 0600 + 网关代码 + HA config 快照 + HA DB online backup 5MB）。
 - **第二步已完成（提交 4c2a71\）**：Mosquitto 放行 LAN 0.0.0.0:1883 + 密码认证（home-gateway/home-api，匿名拒绝验证）；API 支持 MQTT 凭据（config.py/mqtt_client.py 向后兼容）；网关双 MQTT 连接（官方仓版基线统一+播报重试，LOCAL_MQTT_* 配置，云端保留）；**板端全链路闭环验收**：API 下发 led.on → 本地 MQTT → 网关 → 串口执行 → 板子 LED 点亮 → ack done → SQLite（status=done，acked→done 49ms），TTL 过期扫描生效。
 - **第三步已完成（提交 Ò4154\）**：家庭业务接口 /v1/intents|events|tasks|assets 落地（4 表 + 4 路由，JWT 鉴权）——意图白名单拒绝（door.unlock→rejected+reason）、感知事件落库（vision/person_detected）、待办含家庭时区与提醒（pending→done+cancelled）、资产按需查询更新；SQLite 8 表，全部验收通过。
-- **待办（09-08 起）**：语义理解接入（MiMo 必要文本→/v1/intents，工作包 E 落位）；Mosquitto ACL 收敛；迁移核对后停公网业务写入。
+- **工作包 B 收尾已完成（提交 \`af17d57\`）**：Mosquitto ACL 最小权限收敛（home-api 读 ack/status 写 cmd/speak，home-gateway 读 cmd/speak 写 ack/status，越权发布实测丢弃）；全服务重启恢复验证通过（命令闭环复测 queued→acked 14ms→done 50ms）；迁移核对清单落档（服务/数据 8 表/闭环/公网边界）。
+- **待办（09-08 起，工作包 C/E 前置）**：家庭出站通道与入口转发（云端业务写入停用依赖此项，不提前宣称）；语义理解接入（MiMo 必要文本→/v1/intents，工作包 E）；TFLM INT8 端侧视觉（工作包 C）。
 - 边界：官方仓 backend 未改（复制部署）；网关/HA/公网入口未动。
 
 
