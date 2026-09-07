@@ -11,7 +11,9 @@ from . import models
 from .mqtt_client import start_mqtt
 from .ws_hub import init as ws_init, drain
 from .models import Command
-from .routers import health, auth, devices, commands, media, ws as ws_router
+from .routers import (health, auth, devices, commands, media,
+                             intents, events, tasks, assets,
+                             ws as ws_router)
 
 logging.basicConfig(level=logging.INFO)
 # httpx/httpcore 在 INFO 级会打印完整请求 URL，而微信 jscode2session 把 AppSecret
@@ -69,4 +71,8 @@ app.include_router(auth.router)
 app.include_router(devices.router)
 app.include_router(commands.router)
 app.include_router(media.router)
+app.include_router(intents.router)
+app.include_router(events.router)
+app.include_router(tasks.router)
+app.include_router(assets.router)
 app.include_router(ws_router.router)
