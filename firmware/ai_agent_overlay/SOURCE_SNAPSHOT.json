@@ -1,11 +1,11 @@
 {
-  "captured_at": "2026-08-30",
+  "captured_at": "2026-09-07",
   "source_root": "/home/hfy/work/openvela/packages/ai_agent",
   "files": [
     {
       "path": "Makefile",
-      "sha256": "2a2bf63552d34e3fac438e31e081659276b77b90a9188496611d24fe6cd8e1f7",
-      "size": 5820
+      "sha256": "f4de3c1616026d2b7e099be961b3c073eefdd97ed686ff8e24ecf87bd9ae9420",
+      "size": 5894
     },
     {
       "path": "src/agent_main.c",
@@ -19,8 +19,8 @@
     },
     {
       "path": "src/channels/nsh_commands.c",
-      "sha256": "0e8e2f80c749cb64ca33af4d3e1bd9845fd376c90ab12d1a3f21c433a0b3f549",
-      "size": 40658
+      "sha256": "39a2f1410afb118d75a16180b363c3e09acc9947b8629e36bbbed73c5f068db1",
+      "size": 85910
     },
     {
       "path": "src/core/agent_loop.c",
@@ -44,8 +44,8 @@
     },
     {
       "path": "src/infra/vela_tls.c",
-      "sha256": "90c796216bfd1c830a53c6f870290a1460081bc6cc543902334688bcb3afa517",
-      "size": 50952
+      "sha256": "68cf5f416673884473954b26eb22de0bbecbe947c3caa716d51ca47e94673090",
+      "size": 56283
     },
     {
       "path": "src/tools/tool_device.c",
@@ -64,8 +64,8 @@
     },
     {
       "path": "src/ui/hm_lcd_display.c",
-      "sha256": "f4324c337402bf71f8e6cfaf6efa3fab9eba9757409f828639fab0126a73735f",
-      "size": 26646
+      "sha256": "9062d8db076faa45cc4f4ed58cfde0d5415f6163b00f289f8e5650a862157c63",
+      "size": 27342
     },
     {
       "path": "include/tools/tool_device.h",
@@ -79,8 +79,8 @@
     },
     {
       "path": "include/ui/hm_lcd_display.h",
-      "sha256": "d32db169646442b3a0696d7cc45f791e8561dabc32e681d77d0d0fa7ad18f12e",
-      "size": 233
+      "sha256": "66f6a0cc8de3e4401fdeb24e7cdac021b0765e741d3d97acc1d673b61331498c",
+      "size": 296
     }
   ]
 }
