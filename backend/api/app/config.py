@@ -25,9 +25,11 @@ class Settings:
         # 内部 MQTT（docker 网络内明文 1883）；设备/网关走外部 8883 TLS
         self.MQTT_BROKER_HOST = os.getenv("MQTT_BROKER_HOST", "mqtt")
         self.MQTT_BROKER_PORT = int(os.getenv("MQTT_BROKER_PORT", "1883"))
-        # 家庭侧本地 broker 启用密码认证后使用；为空则匿名（兼容云端内网明文）
-        self.MQTT_USERNAME = os.getenv("MQTT_USERNAME", "")
-        self.MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "")
+
+        # 入口转发模式（C1.0）：true 时业务路由经家庭出站通道转发，云端只做入口。
+        # 需云端与家庭共用 JWT_SECRET。
+        self.RELAY_MODE = os.getenv("RELAY_MODE", "false").lower() in ("1", "true", "yes")
+        self.RELAY_TIMEOUT = float(os.getenv("RELAY_TIMEOUT", "20"))
 
         # 第一版默认绑定设备（与设备侧已验证工具对应）
         self.DEMO_DEVICE_ID = os.getenv("DEMO_DEVICE_ID", "esp32s3-eye")
@@ -35,7 +37,10 @@ class Settings:
         # 命令动作白名单（违反即返工：只开放已验证能力）
         self.ALLOWED_ACTIONS = [
             a.strip()
-            for a in os.getenv("ALLOWED_ACTIONS", "led.on,led.off,device.info").split(",")
+            for a in os.getenv(
+                "ALLOWED_ACTIONS",
+                "led.on,led.off,device.info,mihome.set_power,mihome.get_state",
+            ).split(",")
             if a.strip()
         ]
 
