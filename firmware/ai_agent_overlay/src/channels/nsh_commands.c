@@ -42,6 +42,7 @@
 #include "tools/tool_registry.h"
 #include "tools/tool_web_search.h"
 #include "agent_compat.h"
+#include "ui/hm_lcd_display.h"
 #include "agent_config.h"
 
 #if AGENT_SKILL_SYNC_ENABLED
@@ -60,15 +61,22 @@
 #include <malloc.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+
+#include <nuttx/audio/audio.h>
+#include <nuttx/video/video.h>
 
 #ifdef CONFIG_BOARDCTL_RESET
 #include <sys/boardctl.h>
@@ -144,6 +152,7 @@ static void cmd_help(void)
         "  voice_stop             - Stop voice channel\n"
         "  voice_test_tts <text> [out.pcm] - Test TTS synthesis\n"
         "  voice_test_asr <file>  - Test ASR recognition\n"
+        "  media_probe [jpeg]   - Probe OV2640 RGB565 frame + I2S mic (jpeg: only if sensor supports it)\n"
         "  set_voice_tts <name>   - Switch TTS backend\n"
         "  set_voice_asr <name>   - Switch ASR backend\n"
         "  set_weixin_token <tok> - Set WeChat bot token\n"
@@ -156,6 +165,9 @@ static void cmd_help(void)
         "  launch_app <pkg>     - Test launch a QuickApp by package name\n"
         "  exit_app             - Exit current QuickApp and go home\n"
         "  install_skill <name> <url|-> - Install skill from URL or stdin\n"
+        "  skill_write_begin <name> - Begin bounded serial Skill import\n"
+        "  skill_write_hex <name> <hex> - Append one Skill data chunk\n"
+        "  skill_write_commit <name> - Atomically activate imported Skill\n"
 #if AGENT_SKILL_SYNC_ENABLED
         "  skill_sync            - Sync skills from Feishu Bitable\n"
 #endif
@@ -185,6 +197,963 @@ static void cmd_help(void)
 }
 
 /* ── Command implementations ──────────────────────────────────── */
+
+static unsigned long media_checksum(const unsigned char* data, size_t len)
+{
+    unsigned long checksum = 2166136261UL;
+    size_t i;
+
+    for (i = 0; i < len; i++) {
+        checksum ^= data[i];
+        checksum *= 16777619UL;
+    }
+
+    return checksum;
+}
+
+
+/* ── HomeMind media upload（云端转码视觉/语音）────────────────── */
+
+#define HM_MEDIA_FRAME_BYTES (320 * 240 * 2)
+
+static int hm_media_capture_rgb565(unsigned char *out, int out_len)
+{
+    const char *video_path = "/dev/video0";
+    struct v4l2_format fmt;
+    struct v4l2_requestbuffers req;
+    struct v4l2_buffer buf;
+    enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    struct pollfd pfd;
+    int video_fd;
+    int streaming = 0;
+    int copied = -1;
+    int i;
+    unsigned char *frames[3] = { NULL, NULL, NULL };
+
+    video_fd = open(video_path, O_RDWR | O_NONBLOCK);
+    if (video_fd < 0)
+        return -1;
+
+    for (i = 0; i < 3; i++)
+        frames[i] = memalign(32, out_len);
+    if (!frames[0] || !frames[1] || !frames[2])
+        goto out;
+
+    memset(&fmt, 0, sizeof(fmt));
+    fmt.type = type;
+    fmt.fmt.pix.width = 320;
+    fmt.fmt.pix.height = 240;
+    fmt.fmt.pix.field = V4L2_FIELD_ANY;
+    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565;
+    if (ioctl(video_fd, VIDIOC_S_FMT, (uintptr_t)&fmt) < 0)
+        goto out;
+
+    memset(&req, 0, sizeof(req));
+    req.type = type;
+    req.memory = V4L2_MEMORY_USERPTR;
+    req.count = 3;
+    req.mode = V4L2_BUF_MODE_RING;
+    if (ioctl(video_fd, VIDIOC_REQBUFS, (uintptr_t)&req) < 0)
+        goto out;
+
+    memset(&buf, 0, sizeof(buf));
+    for (buf.index = 0; buf.index < 3; buf.index++) {
+        buf.type = type;
+        buf.memory = V4L2_MEMORY_USERPTR;
+        buf.m.userptr = (uintptr_t)frames[buf.index];
+        buf.length = out_len;
+        if (ioctl(video_fd, VIDIOC_QBUF, (uintptr_t)&buf) < 0)
+            goto out;
+    }
+
+    if (ioctl(video_fd, VIDIOC_STREAMON, (uintptr_t)&type) < 0)
+        goto out;
+    streaming = 1;
+
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = video_fd;
+    pfd.events = POLLIN;
+    if (poll(&pfd, 1, 5000) <= 0)
+        goto out;
+
+    memset(&buf, 0, sizeof(buf));
+    buf.type = type;
+    buf.memory = V4L2_MEMORY_USERPTR;
+    if (ioctl(video_fd, VIDIOC_DQBUF, (uintptr_t)&buf) < 0)
+        goto out;
+
+    if (buf.bytesused < (unsigned int)out_len) {
+        copied = -2;  /* short frame: refuse to hand off partial data */
+    } else {
+        memcpy(out, (const void *)(uintptr_t)buf.m.userptr, out_len);
+        copied = out_len;
+    }
+
+out:
+    if (streaming)
+        ioctl(video_fd, VIDIOC_STREAMOFF, (uintptr_t)&type);
+    for (i = 0; i < 3; i++)
+        if (frames[i])
+            free(frames[i]);
+    close(video_fd);
+    return copied;
+}
+
+static void hm_url_encode(const char *in, char *out, int out_cap)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    int n = 0;
+
+    while (*in && n + 4 <= out_cap - 1) {
+        unsigned char c = (unsigned char)*in++;
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+            c == '.' || c == '~') {
+            out[n++] = (char)c;
+        } else {
+            out[n++] = '%';
+            out[n++] = hex[c >> 4];
+            out[n++] = hex[c & 0x0F];
+        }
+    }
+    out[n] = '\0';
+}
+
+static void hm_media_json_str(const char *resp, const char *anchor,
+                              char *out, int out_cap)
+{
+    const char *p;
+    int n = 0;
+
+    out[0] = '\0';
+    p = strstr(resp, anchor);
+    if (!p)
+        return;
+    p += strlen(anchor);
+    while (*p && *p != '"' && n < out_cap - 1) {
+        if (*p == '\\' && p[1])
+            p++;
+        out[n++] = *p++;
+    }
+    out[n] = '\0';
+}
+
+static void cmd_set_media(int argc, char **argv)
+{
+    if (argc < 4) {
+        printf("usage: set_media <host> <port> <token>\n");
+        return;
+    }
+    if (claw_config_set("media_host", argv[1]) != OK ||
+        claw_config_set("media_port", argv[2]) != OK ||
+        claw_config_set("media_token", argv[3]) != OK) {
+        printf("set_media: save failed (kept in RAM)\n");
+        return;
+    }
+    printf("media endpoint saved: %s:%s (token saved)\n", argv[1], argv[2]);
+}
+
+static void cmd_vision(int argc, char **argv)
+{
+    char host[64] = "api.hfy-ai.cloud";
+    char port[8] = "443";
+    char token[128] = "";
+    char qraw[160] = "";
+    char qenc[480];
+    char auth[176];
+    char path[768];
+    char text[512];
+    static unsigned char *frame;
+    static char resp[4096];
+    const vela_header_t extra[] = {
+        { "Content-Type", "application/octet-stream" },
+        { "Authorization", auth },
+        { NULL, NULL }
+    };
+    size_t rlen = 0;
+    int status;
+    int n;
+    int i;
+
+    claw_config_get("media_host", host, sizeof(host));
+    claw_config_get("media_port", port, sizeof(port));
+    claw_config_get("media_token", token, sizeof(token));
+    if (!token[0]) {
+        printf("[Vision-ERR]: media_token not set (set_media first)\n");
+        return;
+    }
+
+    for (i = 1; i < argc && strlen(qraw) < sizeof(qraw) - 2; i++) {
+        strncat(qraw, argv[i], sizeof(qraw) - strlen(qraw) - 2);
+        strncat(qraw, " ", sizeof(qraw) - strlen(qraw) - 2);
+    }
+    if (!qraw[0])
+        strncpy(qraw, "简要描述画面里的内容", sizeof(qraw) - 1);
+    hm_url_encode(qraw, qenc, sizeof(qenc));
+
+    frame = malloc(HM_MEDIA_FRAME_BYTES);
+    if (!frame) {
+        printf("[Vision-ERR]: alloc failed\n");
+        return;
+    }
+    printf("[Vision]: capturing frame...\n");
+    n = hm_media_capture_rgb565(frame, HM_MEDIA_FRAME_BYTES);
+    if (n != HM_MEDIA_FRAME_BYTES) {
+        printf("[Vision-ERR]: capture failed n=%d\n", n);
+        free(frame);
+        frame = NULL;
+        return;
+    }
+
+    snprintf(path, sizeof(path),
+             "/v1/media/frame?w=320&h=240&swap=1&q=%s", qenc);
+    snprintf(auth, sizeof(auth), "Bearer %s", token);
+    printf("[Vision]: uploading %d bytes to %s:%s\n", n, host, port);
+    status = vela_https_request(host, port, "POST", path, extra,
+                                (const char *)frame, n,
+                                resp, sizeof(resp), &rlen);
+    free(frame);
+    frame = NULL;
+    if (rlen < sizeof(resp))
+        resp[rlen] = '\0';
+    else
+        resp[sizeof(resp) - 1] = '\0';
+    if (status == 200) {
+        hm_media_json_str(resp, "\"text\":\"", text, sizeof(text));
+        printf("[Vision]: %s\n", text);
+    } else {
+        printf("[Vision-ERR]: http=%d body=%.200s\n", status, resp);
+    }
+}
+
+
+/* ── HomeMind voice：录音 → 云端 ASR → MiMo 问答 → 小爱音箱播报 ── */
+
+#define HM_VOICE_SECONDS 3
+
+/* 按驱动声明的 nbuffers/buffer_size 做标准多缓冲流式采集：
+ * poll -> DEQUEUE 取满缓冲 -> 拷贝 -> 重新 ENQUEUE，直到录满目标字节数。 */
+static int hm_voice_record(unsigned char *buf, int want_bytes, int rate)
+{
+    const char *audio_path = "/dev/audio/pcm_in0";
+    struct audio_caps_desc_s caps;
+    struct audio_buf_desc_s desc;
+    struct ap_buffer_info_s info;
+    struct pollfd pfd;
+    struct ap_buffer_s **apbs = NULL;
+    unsigned char *dst = buf;
+    int remain = want_bytes;
+    int fd = -1;
+    int started = 0;
+    int nbuf = 0;
+    int bsize = 0;
+    int ret = -1;
+    int i;
+    int idle_polls = 0;
+
+    fd = open(audio_path, O_RDWR | O_NONBLOCK);
+    if (fd < 0) {
+        printf("[Voice-DBG] open fail errno=%d\n", errno);
+        return -1;
+    }
+
+    memset(&caps, 0, sizeof(caps));
+    caps.caps.ac_len = sizeof(struct audio_caps_s);
+    caps.caps.ac_type = AUDIO_TYPE_INPUT;
+    caps.caps.ac_controls.w = rate;
+    caps.caps.ac_controls.b[2] = 16;
+    caps.caps.ac_channels = 1;
+    caps.caps.ac_format.hw = AUDIO_FMT_PCM;
+    if (ioctl(fd, AUDIOIOC_CONFIGURE, (uintptr_t)&caps) < 0) {
+        printf("[Voice-DBG] config fail\n");
+        goto out;
+    }
+
+    memset(&info, 0, sizeof(info));
+    if (ioctl(fd, AUDIOIOC_GETBUFFERINFO, (uintptr_t)&info) < 0) {
+        printf("[Voice-DBG] bufferinfo fail\n");
+        goto out;
+    }
+    nbuf = info.nbuffers;
+    bsize = info.buffer_size;
+    printf("[Voice-DBG] driver nbuffers=%d buffer_size=%d\n", nbuf, bsize);
+    /* 保底采集路径（2026-09-03 验证过的唯一稳定形态）：
+     * 每个 640 字节块都完整走 开->配置->分配->入队->启动->排空->停->释放->关，
+     * 不重入队、不多缓冲（该 I2S 下半层重入队不再产生数据）。
+     * 块间存在间隙，音质有损；ASR 容忍度实测决定后续是否深挖驱动。 */
+    bsize = 640;
+    {
+        int cycles = want_bytes / bsize;
+        int i;
+        for (i = 0; i < cycles && remain > 0; i++) {
+            struct audio_caps_desc_s caps;
+            struct audio_buf_desc_s desc;
+            struct ap_buffer_info_s info;
+            struct pollfd pfd;
+            struct ap_buffer_s *apb = NULL;
+            int cfd = open(audio_path, O_RDWR | O_NONBLOCK);
+            int started = 0;
+            int waited = 0;
+            int got = -1;
+
+            if (cfd < 0)
+                break;
+            memset(&caps, 0, sizeof(caps));
+            caps.caps.ac_len = sizeof(struct audio_caps_s);
+            caps.caps.ac_type = AUDIO_TYPE_INPUT;
+            caps.caps.ac_controls.w = rate;
+            caps.caps.ac_controls.b[2] = 16;
+            caps.caps.ac_channels = 1;
+            caps.caps.ac_format.hw = AUDIO_FMT_PCM;
+            if (ioctl(cfd, AUDIOIOC_CONFIGURE, (uintptr_t)&caps) < 0) {
+                close(cfd);
+                break;
+            }
+            memset(&info, 0, sizeof(info));
+            (void)ioctl(cfd, AUDIOIOC_GETBUFFERINFO, (uintptr_t)&info);
+            memset(&desc, 0, sizeof(desc));
+            desc.numbytes = bsize;
+            desc.u.pbuffer = &apb;
+            if (ioctl(cfd, AUDIOIOC_ALLOCBUFFER, (uintptr_t)&desc) !=
+                (int)sizeof(desc) || !apb) {
+                close(cfd);
+                break;
+            }
+            memset(&desc, 0, sizeof(desc));
+            desc.u.buffer = apb;
+            desc.numbytes = bsize;
+            if (ioctl(cfd, AUDIOIOC_ENQUEUEBUFFER, (uintptr_t)&desc) < 0) {
+                memset(&desc, 0, sizeof(desc));
+                desc.u.buffer = apb;
+                ioctl(cfd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
+                close(cfd);
+                break;
+            }
+            if (ioctl(cfd, AUDIOIOC_START, 0) == 0) {
+                started = 1;
+                memset(&pfd, 0, sizeof(pfd));
+                pfd.fd = cfd;
+                pfd.events = POLLIN;
+                waited = 0;
+                while (apb->nbytes == 0 && waited++ < 6) {
+                    if (poll(&pfd, 1, 200) <= 0 && apb->nbytes == 0)
+                        break;
+                }
+                if (apb->nbytes > 0) {
+                    int n = apb->nbytes < bsize ? apb->nbytes : bsize;
+                    if (n > remain)
+                        n = remain;
+                    memcpy(dst, apb->samp, n);
+                    dst += n;
+                    remain -= n;
+                    got = n;
+                }
+            }
+            if (started)
+                ioctl(cfd, AUDIOIOC_STOP, 0);
+            memset(&desc, 0, sizeof(desc));
+            desc.u.buffer = apb;
+            ioctl(cfd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
+            close(cfd);
+            if (got <= 0)
+                break;
+            if (i % 50 == 49)
+                printf("[Voice]: %d/%d chunks\n", i + 1, cycles);
+        }
+    }
+
+    ret = want_bytes - remain;
+    printf("[Voice-DBG] captured %d bytes\n", ret);
+
+out:
+    if (started)
+        ioctl(fd, AUDIOIOC_STOP, 0);
+    for (i = 0; i < nbuf; i++) {
+        if (apbs && apbs[i]) {
+            memset(&desc, 0, sizeof(desc));
+            desc.u.buffer = apbs[i];
+            ioctl(fd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
+        }
+    }
+    if (apbs)
+        free(apbs);
+    close(fd);
+    return ret;
+}
+
+static void hm_json_escape(const char *in, char *out, int cap)
+{
+    int n = 0;
+
+    while (*in && n < cap - 7) {
+        unsigned char c = (unsigned char)*in++;
+        if (c == '"' || c == '\\') {
+            out[n++] = '\\';
+            out[n++] = (char)c;
+        } else if (c == '\n') {
+            out[n++] = '\\';
+            out[n++] = 'n';
+        } else if (c == '\r' || c == '\t') {
+            out[n++] = ' ';
+        } else if (c >= 0x20) {
+            out[n++] = (char)c;
+        }
+    }
+    out[n] = '\0';
+}
+
+static void cmd_voice(int argc, char **argv)
+{
+    char host[64] = "api.hfy-ai.cloud";
+    char port[8] = "443";
+    char token[128] = "";
+    char llm_host[64] = "";
+    char llm_port[8] = "443";
+    char llm_path[64] = "/v1/chat/completions";
+    char api_key[160] = "";
+    char model[64] = "mimo-v2.5";
+    char auth[224];
+    char path[128];
+    static unsigned char *pcm;
+    static char resp[4096];
+    char *body = NULL;
+    char trans[512];
+    char esc_t[1024];
+    char esc_a[1024];
+    const vela_header_t bin_hdr[] = {
+        { "Content-Type", "application/octet-stream" },
+        { "Authorization", auth },
+        { NULL, NULL }
+    };
+    const vela_header_t json_hdr[] = {
+        { "Content-Type", "application/json" },
+        { "Authorization", auth },
+        { NULL, NULL }
+    };
+    size_t rlen = 0;
+    int status;
+    int pcm_len;
+    int i;
+
+    claw_config_get("media_host", host, sizeof(host));
+    claw_config_get("media_port", port, sizeof(port));
+    claw_config_get("media_token", token, sizeof(token));
+    if (!token[0]) {
+        printf("[Voice-ERR]: media_token not set (set_media first)\n");
+        return;
+    }
+    if (claw_config_get("llm_host", llm_host, sizeof(llm_host)) != OK ||
+        !llm_host[0]) {
+        printf("[Voice-ERR]: llm not configured (set_llm first)\n");
+        return;
+    }
+    claw_config_get("llm_port", llm_port, sizeof(llm_port));
+    claw_config_get("llm_path", llm_path, sizeof(llm_path));
+    claw_config_get("api_key", api_key, sizeof(api_key));
+    claw_config_get("model", model, sizeof(model));
+    if (!api_key[0]) {
+        printf("[Voice-ERR]: api_key missing\n");
+        return;
+    }
+
+    pcm = malloc(HM_VOICE_SECONDS * 16000 * 2);
+    if (!pcm) {
+        printf("[Voice-ERR]: alloc failed\n");
+        return;
+    }
+    printf("[Voice]: recording ~3s, speak now...\n");
+    hm_lcd_show_text("SPEAK NOW");
+    pcm_len = hm_voice_record(pcm, HM_VOICE_SECONDS * 16000 * 2, 16000);
+    if (pcm_len < HM_VOICE_SECONDS * 16000) {
+        printf("[Voice-ERR]: captured too little (%d bytes)\n", pcm_len);
+    hm_lcd_show_text("MIC ERR");
+    hm_lcd_release();
+        free(pcm);
+        pcm = NULL;
+        return;
+    }
+    printf("[Voice]: captured %d bytes, transcribing...\n", pcm_len);
+    hm_lcd_show_text("THINKING");
+
+    snprintf(path, sizeof(path), "/v1/media/audio?rate=16000");
+    snprintf(auth, sizeof(auth), "Bearer %s", token);
+    status = vela_https_request(host, port, "POST", path, bin_hdr,
+                                (const char *)pcm, pcm_len,
+                                resp, sizeof(resp), &rlen);
+    if (rlen < sizeof(resp))
+        resp[rlen] = '\0';
+    else
+        resp[sizeof(resp) - 1] = '\0';
+    if (status != 200) {
+        printf("[Voice-ERR]: asr http=%d body=%.200s\n", status, resp);
+        free(pcm);
+        pcm = NULL;
+        return;
+    }
+    hm_media_json_str(resp, "\"text\":\"", trans, sizeof(trans));
+    if (!trans[0]) {
+        printf("[Voice-ERR]: empty transcript\n");
+        free(pcm);
+        pcm = NULL;
+        return;
+    }
+    printf("[Voice]: %s\n", trans);
+
+    /* MiMo 问答（同步，一句话回答） */
+    hm_json_escape(trans, esc_t, sizeof(esc_t));
+    body = malloc(2048);
+    if (!body) {
+        printf("[Voice-ERR]: body alloc failed\n");
+        free(pcm);
+        pcm = NULL;
+        return;
+    }
+    snprintf(body, 2048,
+             "{\"model\":\"%s\",\"messages\":[{\"role\":\"user\","
+             "\"content\":\"%s（你是家庭机器人HomeMind，请用不超过60字的"
+             "中文口语回答）\"}]}",
+             model, esc_t);
+    snprintf(path, sizeof(path), "%s", llm_path);
+    snprintf(auth, sizeof(auth), "Bearer %s", api_key);
+    printf("[Voice]: asking %s:%s%s ...\n", llm_host, llm_port, llm_path);
+    status = vela_https_request(llm_host, llm_port, "POST", path, json_hdr,
+                                body, strlen(body),
+                                resp, sizeof(resp), &rlen);
+    free(body);
+    body = NULL;
+    free(pcm);
+    pcm = NULL;
+    if (rlen < sizeof(resp))
+        resp[rlen] = '\0';
+    else
+        resp[sizeof(resp) - 1] = '\0';
+    if (status != 200) {
+        printf("[Voice-ERR]: llm http=%d body=%.200s\n", status, resp);
+        return;
+    }
+    hm_media_json_str(resp, "\"content\":\"", esc_a, sizeof(esc_a));
+    if (!esc_a[0]) {
+        printf("[Voice-ERR]: empty answer\n");
+        return;
+    }
+    printf("[Agent]: %s\n", esc_a);
+    hm_lcd_release();
+    hm_lcd_show_text("DONE");
+
+    /* 让小爱音箱播报回答（announce 端点 -> MQTT speak -> 网关 -> HA） */
+    snprintf(auth, sizeof(auth), "Bearer %s", token);
+    hm_json_escape(esc_a, esc_t, sizeof(esc_t));
+    body = malloc(1024);
+    if (!body)
+        return;
+    snprintf(body, 1024,
+             "{\"device_id\":\"esp32s3-eye\",\"text\":\"%s\"}", esc_t);
+    status = vela_https_request(host, port, "POST", "/v1/media/announce",
+                                json_hdr, body, strlen(body),
+                                resp, sizeof(resp), &rlen);
+    free(body);
+    body = NULL;
+    printf("[Voice]: announce http=%d（音箱应已播报）\n", status);
+
+    /* 原文送入真实 agent 管线：本地意图/工具（如开灯）仍会被执行 */
+    {
+        agent_msg_t msg = { 0 };
+        strncpy(msg.channel, "cli", sizeof(msg.channel) - 1);
+        strncpy(msg.chat_id, "console", sizeof(msg.chat_id) - 1);
+        msg.content = strdup(trans);
+        if (msg.content)
+            message_bus_push_inbound(&msg);
+    }
+    (void)i;
+}
+
+static void cmd_media_probe(int argc, char** argv)
+{
+    const char* video_path = "/dev/video0";
+    const char* audio_path = "/dev/audio/pcm_in0";
+    const size_t video_bytes = 320 * 240 * 2;
+    unsigned char* frames[3] = { NULL, NULL, NULL };
+    int video_fd = -1;
+    int audio_fd = -1;
+    int audio_ret;
+    int audio_started = 0;
+    int video_ret;
+    int streaming = 0;
+    struct v4l2_format fmt;
+    struct v4l2_requestbuffers req;
+    struct v4l2_buffer buf;
+    enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    struct pollfd pfd;
+    struct audio_caps_desc_s audio_caps;
+    struct audio_buf_desc_s audio_desc;
+    struct ap_buffer_info_s audio_info;
+    struct ap_buffer_s* audio_buffers[4] = { NULL, NULL, NULL, NULL };
+    unsigned int audio_count = 0;
+    unsigned int audio_index;
+    unsigned int audio_completed;
+    unsigned int audio_polls;
+    int audio_safe_to_free = 0;
+    unsigned char audio[640];
+    int force_jpeg;
+    int use_jpeg = 0;
+
+    force_jpeg = (argc >= 2 && strcmp(argv[1], "jpeg") == 0);
+
+    printf("MEDIA_PROBE_BEGIN video=%s audio=%s\n", video_path,
+           audio_path);
+    fflush(stdout);
+
+    video_fd = open(video_path, O_RDWR | O_NONBLOCK);
+    if (video_fd < 0) {
+        printf("MEDIA_VIDEO_FRAME_FAIL stage=open errno=%d\n", errno);
+    } else {
+        frames[0] = memalign(32, video_bytes);
+        frames[1] = memalign(32, video_bytes);
+        frames[2] = memalign(32, video_bytes);
+        if (!frames[0] || !frames[1] || !frames[2]) {
+            printf("MEDIA_VIDEO_FRAME_FAIL stage=alloc errno=%d\n", ENOMEM);
+        } else {
+            if (force_jpeg) {
+                /* Only request JPEG when the sensor enumerates it; the
+                 * generic V4L2 layer would otherwise accept S_FMT(JPEG)
+                 * even for an RGB-only sensor. */
+
+                struct v4l2_fmtdesc fd;
+                int has_jpeg = 0;
+                int fidx;
+
+                for (fidx = 0; fidx < 8 && !has_jpeg; fidx++) {
+                    memset(&fd, 0, sizeof(fd));
+                    fd.index = fidx;
+                    fd.type = type;
+                    if (ioctl(video_fd, VIDIOC_ENUM_FMT,
+                              (uintptr_t)&fd) < 0) {
+                        break;
+                    }
+                    if (fd.pixelformat == V4L2_PIX_FMT_JPEG) {
+                        has_jpeg = 1;
+                    }
+                }
+                if (has_jpeg) {
+                    memset(&fmt, 0, sizeof(fmt));
+                    fmt.type = type;
+                    fmt.fmt.pix.width = 320;
+                    fmt.fmt.pix.height = 240;
+                    fmt.fmt.pix.field = V4L2_FIELD_ANY;
+                    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_JPEG;
+                    fmt.fmt.pix.sizeimage = video_bytes;
+                    video_ret = ioctl(video_fd, VIDIOC_S_FMT,
+                                      (uintptr_t)&fmt);
+                    if (video_ret >= 0) {
+                        use_jpeg = 1;
+                    }
+                }
+            }
+            if (!use_jpeg) {
+                /* JPEG unsupported by this driver: fall back to RGB565 */
+
+                memset(&fmt, 0, sizeof(fmt));
+                fmt.type = type;
+                fmt.fmt.pix.width = 320;
+                fmt.fmt.pix.height = 240;
+                fmt.fmt.pix.field = V4L2_FIELD_ANY;
+                fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565;
+                video_ret = ioctl(video_fd, VIDIOC_S_FMT, (uintptr_t)&fmt);
+            }
+            if (video_ret < 0) {
+                printf("MEDIA_VIDEO_FRAME_FAIL stage=s_fmt errno=%d\n",
+                       errno);
+            } else {
+                memset(&req, 0, sizeof(req));
+                req.type = type;
+                req.memory = V4L2_MEMORY_USERPTR;
+                req.count = 3;
+                req.mode = V4L2_BUF_MODE_RING;
+                video_ret = ioctl(video_fd, VIDIOC_REQBUFS,
+                                  (uintptr_t)&req);
+                if (video_ret < 0) {
+                    printf("MEDIA_VIDEO_FRAME_FAIL stage=reqbufs errno=%d\n",
+                           errno);
+                } else {
+                    video_ret = 0;
+                    memset(&buf, 0, sizeof(buf));
+                    for (buf.index = 0; buf.index < 3; buf.index++) {
+                        buf.type = type;
+                        buf.memory = V4L2_MEMORY_USERPTR;
+                        buf.m.userptr = (uintptr_t)frames[buf.index];
+                        buf.length = video_bytes;
+                        video_ret = ioctl(video_fd, VIDIOC_QBUF,
+                                          (uintptr_t)&buf);
+                        if (video_ret < 0) {
+                            break;
+                        }
+                    }
+                    if (video_ret < 0) {
+                        printf("MEDIA_VIDEO_FRAME_FAIL stage=qbuf index=%u errno=%d\n",
+                               (unsigned int)buf.index, errno);
+                    } else {
+                        video_ret = ioctl(video_fd, VIDIOC_STREAMON,
+                                          (uintptr_t)&type);
+                        if (video_ret < 0) {
+                            printf("MEDIA_VIDEO_FRAME_FAIL stage=streamon errno=%d\n",
+                                   errno);
+                        } else {
+                            streaming = 1;
+                            memset(&pfd, 0, sizeof(pfd));
+                            pfd.fd = video_fd;
+                            pfd.events = POLLIN;
+                            video_ret = poll(&pfd, 1, 5000);
+                            if (video_ret <= 0) {
+                                printf("MEDIA_VIDEO_FRAME_FAIL stage=poll ret=%d revents=0x%x errno=%d\n",
+                                       video_ret, pfd.revents, errno);
+                            } else {
+                                memset(&buf, 0, sizeof(buf));
+                                buf.type = type;
+                                buf.memory = V4L2_MEMORY_USERPTR;
+                                video_ret = ioctl(video_fd, VIDIOC_DQBUF,
+                                                  (uintptr_t)&buf);
+                                if (video_ret < 0) {
+                                    printf("MEDIA_VIDEO_FRAME_FAIL stage=dqbuf errno=%d\n",
+                                           errno);
+                                } else {
+                                    FAR const unsigned char* frame =
+                                        (FAR const unsigned char*)
+                                        (uintptr_t)buf.m.userptr;
+                                    if (use_jpeg) {
+                                        unsigned int head_i;
+                                        unsigned int scan_i;
+                                        int soi_off = -1;
+
+                                        /* JPEG is only claimed when the
+                                         * frame really starts with the
+                                         * SOI marker ff d8. */
+
+                                        for (scan_i = 0;
+                                             frame != NULL &&
+                                             scan_i + 1 < buf.bytesused;
+                                             scan_i++) {
+                                            if (frame[scan_i] == 0xff &&
+                                                frame[scan_i + 1] == 0xd8) {
+                                                soi_off = (int)scan_i;
+                                                break;
+                                            }
+                                        }
+                                        if (soi_off == 0) {
+                                            printf("MEDIA_VIDEO_FRAME_JPEG bytes=%u marker=ffd8\n",
+                                                   (unsigned int)buf.bytesused);
+                                        } else {
+                                            printf("MEDIA_VIDEO_FRAME_RAW bytes=%u marker=%02x%02x\n",
+                                                   (unsigned int)buf.bytesused,
+                                                   buf.bytesused >= 1 ?
+                                                   frame[0] : 0,
+                                                   buf.bytesused >= 2 ?
+                                                   frame[1] : 0);
+                                        }
+                                        printf("MEDIA_VIDEO_HEAD8 hex=");
+                                        for (head_i = 0;
+                                             head_i < 8 &&
+                                             head_i < buf.bytesused;
+                                             head_i++) {
+                                            printf("%s%02x",
+                                                   head_i == 0 ? "" : " ",
+                                                   frame[head_i]);
+                                        }
+                                        printf("\n");
+                                        printf("MEDIA_VIDEO_SOI off=%d\n",
+                                               soi_off);
+                                    } else {
+                                        printf("MEDIA_VIDEO_FRAME bytes=%u checksum=%lu sequence=%u\n",
+                                               (unsigned int)buf.bytesused,
+                                               media_checksum(frame,
+                                                              buf.bytesused < 256 ?
+                                                              buf.bytesused : 256),
+                                               (unsigned int)buf.sequence);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (streaming) {
+        ioctl(video_fd, VIDIOC_STREAMOFF, (uintptr_t)&type);
+    }
+    if (frames[0]) {
+        free(frames[0]);
+    }
+    if (frames[1]) {
+        free(frames[1]);
+    }
+    if (frames[2]) {
+        free(frames[2]);
+    }
+    if (video_fd >= 0) {
+        close(video_fd);
+    }
+
+    audio_fd = open(audio_path, O_RDWR | O_NONBLOCK);
+    if (audio_fd < 0) {
+        printf("MEDIA_AUDIO_PCM_FAIL stage=open errno=%d\n", errno);
+    } else {
+        memset(&audio_caps, 0, sizeof(audio_caps));
+        audio_caps.caps.ac_len = sizeof(struct audio_caps_s);
+        audio_caps.caps.ac_type = AUDIO_TYPE_INPUT;
+        audio_caps.caps.ac_controls.w = 16000;
+        audio_caps.caps.ac_controls.b[2] = 16;
+        audio_caps.caps.ac_channels = 1;
+        audio_caps.caps.ac_format.hw = AUDIO_FMT_PCM;
+        printf("MEDIA_AUDIO_STAGE config\n");
+        fflush(stdout);
+        audio_ret = ioctl(audio_fd, AUDIOIOC_CONFIGURE,
+                          (uintptr_t)&audio_caps);
+        if (audio_ret < 0) {
+            printf("MEDIA_AUDIO_PCM_FAIL stage=config ret=%d errno=%d\n",
+                   audio_ret, errno);
+        } else {
+            memset(&audio_info, 0, sizeof(audio_info));
+            audio_ret = ioctl(audio_fd, AUDIOIOC_GETBUFFERINFO,
+                              (uintptr_t)&audio_info);
+            printf("MEDIA_AUDIO_STAGE info nbuffers=%u buffer=%u ret=%d\n",
+                   (unsigned int)audio_info.nbuffers,
+                   (unsigned int)audio_info.buffer_size, audio_ret);
+            fflush(stdout);
+            if (audio_ret < 0) {
+                printf("MEDIA_AUDIO_PCM_FAIL stage=info ret=%d errno=%d\n",
+                       audio_ret, errno);
+            } else {
+                audio_count = audio_info.nbuffers;
+                /* This command is a finite capture probe, not a streaming
+                 * consumer.  Keep one short, 4-byte-aligned DMA transfer so
+                 * the stock I2S lower half can drain and release it cleanly
+                 * before the next probe. */
+                if (audio_count > 1) {
+                    audio_count = 1;
+                }
+                printf("MEDIA_AUDIO_STAGE alloc count=%u\n", audio_count);
+                fflush(stdout);
+                audio_ret = 0;
+                for (audio_index = 0; audio_index < audio_count;
+                     audio_index++) {
+                    memset(&audio_desc, 0, sizeof(audio_desc));
+                    audio_desc.numbytes = sizeof(audio);
+                    audio_desc.u.pbuffer = &audio_buffers[audio_index];
+                    audio_ret = ioctl(audio_fd, AUDIOIOC_ALLOCBUFFER,
+                                      (uintptr_t)&audio_desc);
+                    if (audio_ret != sizeof(audio_desc) ||
+                        !audio_buffers[audio_index]) {
+                        printf("MEDIA_AUDIO_PCM_FAIL stage=alloc index=%u ret=%d errno=%d\n",
+                               audio_index, audio_ret, errno);
+                        break;
+                    }
+                }
+                if (audio_index == audio_count) {
+                    printf("MEDIA_AUDIO_STAGE enqueue count=%u\n",
+                           audio_count);
+                    fflush(stdout);
+                    for (audio_index = 0; audio_index < audio_count;
+                         audio_index++) {
+                        memset(&audio_desc, 0, sizeof(audio_desc));
+                        audio_desc.u.buffer = audio_buffers[audio_index];
+                        audio_desc.numbytes = sizeof(audio);
+                        audio_ret = ioctl(audio_fd, AUDIOIOC_ENQUEUEBUFFER,
+                                          (uintptr_t)&audio_desc);
+                        if (audio_ret < 0) {
+                            printf("MEDIA_AUDIO_PCM_FAIL stage=enqueue index=%u ret=%d errno=%d\n",
+                                   audio_index, audio_ret, errno);
+                            break;
+                        }
+                    }
+                }
+                if (audio_index == audio_count) {
+                    printf("MEDIA_AUDIO_STAGE start\n");
+                    fflush(stdout);
+                    audio_ret = ioctl(audio_fd, AUDIOIOC_START, 0);
+                    if (audio_ret < 0) {
+                        printf("MEDIA_AUDIO_PCM_FAIL stage=start ret=%d errno=%d\n",
+                               audio_ret, errno);
+                    } else {
+                        audio_started = 1;
+                        printf("MEDIA_AUDIO_STAGE poll\n");
+                        fflush(stdout);
+                        audio_completed = 0;
+                        audio_polls = 0;
+                        memset(&pfd, 0, sizeof(pfd));
+                        pfd.fd = audio_fd;
+                        pfd.events = POLLIN;
+                        while (audio_completed < audio_count &&
+                               audio_polls++ < 8) {
+                            audio_completed = 0;
+                            for (audio_index = 0; audio_index < audio_count;
+                                 audio_index++) {
+                                if (audio_buffers[audio_index] &&
+                                    audio_buffers[audio_index]->nbytes > 0) {
+                                    audio_completed++;
+                                }
+                            }
+                            if (audio_completed == audio_count) {
+                                break;
+                            }
+                            video_ret = poll(&pfd, 1, 1000);
+                            if (video_ret <= 0) {
+                                break;
+                            }
+                        }
+                        if (audio_completed < audio_count) {
+                            printf("MEDIA_AUDIO_PCM_FAIL stage=drain completed=%u/%u ret=%d revents=0x%x errno=%d\n",
+                                   audio_completed, audio_count, video_ret,
+                                   pfd.revents, errno);
+                        } else {
+                            audio_safe_to_free = 1;
+                            audio_ret = 0;
+                            for (audio_index = 0; audio_index < audio_count;
+                                 audio_index++) {
+                                if (audio_buffers[audio_index] &&
+                                    audio_buffers[audio_index]->nbytes > 0) {
+                                    audio_ret = audio_buffers[audio_index]->nbytes;
+                                    memcpy(audio,
+                                           audio_buffers[audio_index]->samp,
+                                           audio_ret < (int)sizeof(audio) ?
+                                           (size_t)audio_ret : sizeof(audio));
+                                    break;
+                                }
+                            }
+                            if (audio_ret == 0) {
+                                printf("MEDIA_AUDIO_PCM_FAIL stage=buffer_empty revents=0x%x errno=%d\n",
+                                       pfd.revents, errno);
+                            } else {
+                                printf("MEDIA_AUDIO_PCM bytes=%d buffer=%u checksum=%lu\n",
+                                       audio_ret, audio_index,
+                                       media_checksum(audio, audio_ret < 256 ?
+                                                      (size_t)audio_ret : 256));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (audio_started) {
+            ioctl(audio_fd, AUDIOIOC_STOP, 0);
+        }
+        if (audio_safe_to_free) {
+            for (audio_index = 0; audio_index < audio_count; audio_index++) {
+                if (!audio_buffers[audio_index]) {
+                    continue;
+                }
+                memset(&audio_desc, 0, sizeof(audio_desc));
+                audio_desc.u.buffer = audio_buffers[audio_index];
+                ioctl(audio_fd, AUDIOIOC_FREEBUFFER,
+                      (uintptr_t)&audio_desc);
+            }
+        }
+        close(audio_fd);
+    }
+
+    printf("MEDIA_PROBE_DONE\n");
+    fflush(stdout);
+}
 
 static void cmd_net_test(int argc, char** argv)
 {
@@ -893,7 +1862,159 @@ static void cmd_mcp_tools(void)
 }
 #endif /* CONFIG_AI_AGENT_MCP */
 
+/* ── Skill file installation helpers ───────────────────────── */
+
+#define SKILL_NAME_MAX 48
+#define SKILL_IMPORT_MAX_BYTES 8191
+#define SKILL_IMPORT_HEX_MAX 192
+
+static char g_skill_import_name[SKILL_NAME_MAX];
+static size_t g_skill_import_size;
+static int g_skill_import_active;
+
+static int skill_name_valid(const char* name)
+{
+    size_t len;
+
+    if (!name || name[0] == '\0') {
+        return ERROR;
+    }
+
+    len = strlen(name);
+    if (len >= SKILL_NAME_MAX) {
+        return ERROR;
+    }
+
+    for (const char* p = name; *p; p++) {
+        if (!(*p >= 'a' && *p <= 'z') && !(*p >= '0' && *p <= '9')
+            && *p != '-' && *p != '_') {
+            return ERROR;
+        }
+    }
+
+    return OK;
+}
+
+static int skill_path(const char* name, const char* suffix,
+                      char* path, size_t path_size)
+{
+    int n;
+
+    if (skill_name_valid(name) != OK || !suffix || !path) {
+        return ERROR;
+    }
+
+    n = snprintf(path, path_size, "%s%s%s", AGENT_SKILLS_DIR, name,
+                 suffix);
+    if (n < 0 || (size_t)n >= path_size) {
+        return ERROR;
+    }
+    return OK;
+}
+
+static int skill_hex_value(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
 /* ── install_skill: install a skill from URL ──────────────── */
+
+/* vela_https_get() takes host, port and path separately.  Keep URL parsing
+ * here so the public install_skill command cannot accidentally pass the
+ * literal "https://..." prefix to getaddrinfo().  Only https URLs are
+ * accepted; credentials and non-numeric ports are rejected. */
+static int parse_https_url(const char* url,
+                           char* host, size_t host_size,
+                           char* port, size_t port_size,
+                           char* path, size_t path_size)
+{
+    const char* prefix = "https://";
+    const size_t prefix_len = 8;
+    const char* authority;
+    const char* end;
+    const char* colon = NULL;
+    size_t host_len;
+    size_t port_len;
+    size_t path_len;
+
+    if (!url || strncmp(url, prefix, prefix_len) != 0) {
+        return ERROR;
+    }
+
+    authority = url + prefix_len;
+    end = strchr(authority, '/');
+    if (!end) {
+        end = authority + strlen(authority);
+    }
+    if (end == authority) {
+        return ERROR;
+    }
+
+    for (const char* p = authority; p < end; p++) {
+        if (*p == ':') {
+            if (colon) {
+                /* IPv6 literals are intentionally unsupported here. */
+                return ERROR;
+            }
+            colon = p;
+        }
+        if (*p == '@') {
+            /* Do not allow userinfo in a skill URL. */
+            return ERROR;
+        }
+    }
+
+    host_len = colon ? (size_t)(colon - authority)
+                     : (size_t)(end - authority);
+    if (host_len == 0 || host_len >= host_size) {
+        return ERROR;
+    }
+    memcpy(host, authority, host_len);
+    host[host_len] = '\0';
+
+    if (colon) {
+        port_len = (size_t)(end - colon - 1);
+        if (port_len == 0 || port_len >= port_size) {
+            return ERROR;
+        }
+        for (size_t i = 0; i < port_len; i++) {
+            if (colon[1 + i] < '0' || colon[1 + i] > '9') {
+                return ERROR;
+            }
+        }
+        memcpy(port, colon + 1, port_len);
+        port[port_len] = '\0';
+    } else {
+        if (port_size < 4) {
+            return ERROR;
+        }
+        strcpy(port, "443");
+    }
+
+    if (*end == '\0') {
+        if (path_size < 2) {
+            return ERROR;
+        }
+        strcpy(path, "/");
+        return OK;
+    }
+
+    path_len = strlen(end);
+    if (path_len == 0 || path_len >= path_size) {
+        return ERROR;
+    }
+    memcpy(path, end, path_len + 1);
+    return OK;
+}
 
 static void cmd_install_skill(int argc, char** argv)
 {
@@ -907,25 +2028,22 @@ static void cmd_install_skill(int argc, char** argv)
     const char* name = argv[1];
     const char* url = argv[2];
 
-    /* Validate name (lowercase + digits + hyphens) */
-    for (const char* p = name; *p; p++) {
-        if (!(*p >= 'a' && *p <= 'z') && !(*p >= '0' && *p <= '9')
-            && *p != '-' && *p != '_') {
-            printf("Invalid skill name: use a-z, 0-9, hyphens\n");
-            return;
-        }
+    if (skill_name_valid(name) != OK) {
+        printf("Invalid skill name: use a-z, 0-9, hyphens\n");
+        return;
     }
 
-    /* Validate URL starts with https:// */
-    if (strncmp(url, "https://", 8) != 0) {
-        printf("Only HTTPS URLs are allowed\n");
+    char host[128];
+    char port[8];
+    char path_url[512];
+    if (parse_https_url(url, host, sizeof(host), port, sizeof(port),
+            path_url, sizeof(path_url)) != OK) {
+        printf("Invalid HTTPS URL (host/path required; no credentials)\n");
         return;
     }
 
     char path[128];
-    int n = snprintf(path, sizeof(path), "%s%s.md",
-        AGENT_SKILLS_DIR, name);
-    if (n < 0 || (size_t)n >= sizeof(path)) {
+    if (skill_path(name, ".md", path, sizeof(path)) != OK) {
         printf("Skill name too long\n");
         return;
     }
@@ -937,7 +2055,7 @@ static void cmd_install_skill(int argc, char** argv)
     }
 
     memset(buf, 0, 8192);
-    int rc = vela_https_get(url, "443", NULL, buf, 8192);
+    int rc = vela_https_get(host, port, path_url, buf, 8192);
     if (rc < 200 || rc >= 300) {
         printf("Download failed: HTTP %d\n", rc);
         free(buf);
@@ -980,6 +2098,150 @@ static void cmd_install_skill(int argc, char** argv)
     fclose(f);
     free(buf);
     printf("Skill installed: %s (%zu bytes)\n", path, content_len);
+}
+
+/*
+ * Offline provisioning path for boards whose Wi-Fi is client-isolated from
+ * the build host.  The only writable target is AGENT_SKILLS_DIR/<name>.part;
+ * skill_write_commit() renames it to .md after a small markdown sanity check.
+ * Chunks are hex-encoded so the NSH tokenizer never has to parse Skill text.
+ */
+static void cmd_skill_write_begin(int argc, char** argv)
+{
+    char path[128];
+    FILE* f;
+
+    if (argc != 2) {
+        printf("Usage: skill_write_begin <name>\n");
+        return;
+    }
+    if (skill_path(argv[1], ".part", path, sizeof(path)) != OK) {
+        printf("Invalid skill name\n");
+        return;
+    }
+
+    f = fopen(path, "w");
+    if (!f) {
+        printf("Cannot stage: %s\n", path);
+        return;
+    }
+    fclose(f);
+
+    strncpy(g_skill_import_name, argv[1], sizeof(g_skill_import_name) - 1);
+    g_skill_import_name[sizeof(g_skill_import_name) - 1] = '\0';
+    g_skill_import_size = 0;
+    g_skill_import_active = 1;
+    printf("Skill staging started: %s\n", path);
+}
+
+static void cmd_skill_write_hex(int argc, char** argv)
+{
+    char path[128];
+    unsigned char decoded[SKILL_IMPORT_HEX_MAX / 2];
+    const char* hex;
+    size_t hex_len;
+    size_t decoded_len;
+    FILE* f;
+
+    if (argc != 3) {
+        printf("Usage: skill_write_hex <name> <hex>\n");
+        return;
+    }
+    if (!g_skill_import_active || strcmp(argv[1], g_skill_import_name) != 0) {
+        printf("No matching Skill staging session\n");
+        return;
+    }
+    hex = argv[2];
+    hex_len = strlen(hex);
+    if (hex_len == 0 || hex_len > SKILL_IMPORT_HEX_MAX
+        || (hex_len & 1) != 0) {
+        printf("Invalid hex chunk (1..%d bytes)\n",
+               SKILL_IMPORT_HEX_MAX / 2);
+        return;
+    }
+    decoded_len = hex_len / 2;
+    if (g_skill_import_size + decoded_len > SKILL_IMPORT_MAX_BYTES) {
+        printf("Skill exceeds %d-byte limit\n", SKILL_IMPORT_MAX_BYTES);
+        return;
+    }
+
+    for (size_t i = 0; i < decoded_len; i++) {
+        int high = skill_hex_value(hex[i * 2]);
+        int low = skill_hex_value(hex[i * 2 + 1]);
+        if (high < 0 || low < 0) {
+            printf("Invalid hex chunk\n");
+            return;
+        }
+        decoded[i] = (unsigned char)((high << 4) | low);
+    }
+
+    if (skill_path(g_skill_import_name, ".part", path, sizeof(path)) != OK) {
+        printf("Invalid skill name\n");
+        return;
+    }
+    f = fopen(path, "ab");
+    if (!f) {
+        printf("Cannot append: %s\n", path);
+        return;
+    }
+    if (fwrite(decoded, 1, decoded_len, f) != decoded_len) {
+        fclose(f);
+        printf("Skill chunk write failed\n");
+        return;
+    }
+    fclose(f);
+    g_skill_import_size += decoded_len;
+    printf("Skill staging: %zu bytes\n", g_skill_import_size);
+}
+
+static void cmd_skill_write_commit(int argc, char** argv)
+{
+    char part_path[128];
+    char final_path[128];
+    FILE* f;
+    int first;
+    int second;
+
+    if (argc != 2) {
+        printf("Usage: skill_write_commit <name>\n");
+        return;
+    }
+    if (!g_skill_import_active || strcmp(argv[1], g_skill_import_name) != 0) {
+        printf("No matching Skill staging session\n");
+        return;
+    }
+    if (skill_path(argv[1], ".part", part_path, sizeof(part_path)) != OK
+        || skill_path(argv[1], ".md", final_path, sizeof(final_path)) != OK) {
+        printf("Invalid skill name\n");
+        return;
+    }
+    if (g_skill_import_size < 10) {
+        printf("Skill is too small (%zu bytes)\n", g_skill_import_size);
+        return;
+    }
+
+    f = fopen(part_path, "rb");
+    if (!f) {
+        printf("Cannot read staged Skill\n");
+        return;
+    }
+    first = fgetc(f);
+    second = fgetc(f);
+    fclose(f);
+    if (first != '#' && !(first == '-' && second == '-')) {
+        printf("Invalid skill format: must start with # or ---\n");
+        return;
+    }
+    if (rename(part_path, final_path) != 0) {
+        printf("Cannot activate Skill: %s\n", final_path);
+        return;
+    }
+
+    printf("Skill committed: %s (%zu bytes)\n", final_path,
+           g_skill_import_size);
+    g_skill_import_name[0] = '\0';
+    g_skill_import_size = 0;
+    g_skill_import_active = 0;
 }
 
 #if AGENT_SKILL_SYNC_ENABLED
@@ -1131,6 +2393,14 @@ static void* cli_thread(void* arg)
             cmd_voice_test_tts(argc, argv);
         else if (strcmp(cmd, "voice_test_asr") == 0)
             cmd_voice_test_asr(argc, argv);
+        else if (strcmp(cmd, "media_probe") == 0)
+            cmd_media_probe(argc, argv);
+        else if (strcmp(cmd, "set_media") == 0)
+            cmd_set_media(argc, argv);
+        else if (strcmp(cmd, "vision") == 0)
+            cmd_vision(argc, argv);
+        else if (strcmp(cmd, "voice") == 0)
+            cmd_voice(argc, argv);
         else if (strcmp(cmd, "set_voice_tts") == 0)
             cmd_set_voice_tts(argc, argv);
         else if (strcmp(cmd, "set_voice_asr") == 0)
@@ -1145,6 +2415,12 @@ static void* cli_thread(void* arg)
             cmd_exit_app();
         else if (strcmp(cmd, "install_skill") == 0)
             cmd_install_skill(argc, argv);
+        else if (strcmp(cmd, "skill_write_begin") == 0)
+            cmd_skill_write_begin(argc, argv);
+        else if (strcmp(cmd, "skill_write_hex") == 0)
+            cmd_skill_write_hex(argc, argv);
+        else if (strcmp(cmd, "skill_write_commit") == 0)
+            cmd_skill_write_commit(argc, argv);
 #if AGENT_SKILL_SYNC_ENABLED
         else if (strcmp(cmd, "skill_sync") == 0)
             cmd_skill_sync();

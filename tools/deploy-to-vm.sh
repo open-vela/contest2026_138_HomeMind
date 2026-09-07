@@ -10,6 +10,10 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 AI_AGENT_ROOT="$OPENVELA_ROOT/packages/ai_agent"
 AI_AGENT_OVERLAY="$PROJECT_ROOT/firmware/ai_agent_overlay"
 NUTTX_PATCH="$PROJECT_ROOT/firmware/patches/0001-homemind-esp32s3-nuttx.patch"
+NUTTX_MEDIA_PATCH="$PROJECT_ROOT/firmware/patches/0002-homemind-esp32s3-eye-media.patch"
+NUTTX_MEDIA_REPAIR_PATCH="$PROJECT_ROOT/firmware/patches/0003-repair-eye-bringup-media-placement.patch"
+NUTTX_MEDIA_SOURCE="$PROJECT_ROOT/firmware/nuttx_media/esp32s3_board_camera.c"
+NUTTX_MEDIA_DEST="$OPENVELA_ROOT/nuttx/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_board_camera.c"
 
 fail() {
     printf '[ERROR] %s\n' "$*" >&2
@@ -19,6 +23,9 @@ fail() {
 [ -d "$AI_AGENT_ROOT/src" ] || fail "ai_agent not found: $AI_AGENT_ROOT"
 [ -f "$OPENVELA_ROOT/nuttx/Makefile" ] || fail "NuttX not found: $OPENVELA_ROOT/nuttx"
 [ -f "$NUTTX_PATCH" ] || fail "NuttX patch not found: $NUTTX_PATCH"
+[ -f "$NUTTX_MEDIA_PATCH" ] || fail "NuttX media patch not found: $NUTTX_MEDIA_PATCH"
+[ -f "$NUTTX_MEDIA_REPAIR_PATCH" ] || fail "NuttX media repair patch not found: $NUTTX_MEDIA_REPAIR_PATCH"
+[ -f "$NUTTX_MEDIA_SOURCE" ] || fail "NuttX camera source not found: $NUTTX_MEDIA_SOURCE"
 
 overlay_files=(
     Makefile
@@ -48,14 +55,41 @@ for rel in "${overlay_files[@]}"; do
     printf '  %s\n' "$rel"
 done
 
-printf '[INFO] Checking HomeMind NuttX patch\n'
-if patch --batch --forward -d "$OPENVELA_ROOT/nuttx" -p1 --dry-run --silent < "$NUTTX_PATCH"; then
-    patch --batch --forward -d "$OPENVELA_ROOT/nuttx" -p1 --silent < "$NUTTX_PATCH"
-    printf '[INFO] NuttX patch applied\n'
-elif patch --batch --reverse -d "$OPENVELA_ROOT/nuttx" -p1 --dry-run --silent < "$NUTTX_PATCH"; then
-    printf '[INFO] NuttX patch already applied\n'
-else
-    fail "NuttX source differs from both the recorded base and HomeMind patch; stop and inspect it"
-fi
+apply_nuttx_patch() {
+    local label="$1"
+    local patch_file="$2"
+
+    printf '[INFO] Checking %s\n' "$label"
+    if patch --batch --forward -d "$OPENVELA_ROOT/nuttx" -p1 --dry-run --silent < "$patch_file"; then
+        patch --batch --forward -d "$OPENVELA_ROOT/nuttx" -p1 --silent < "$patch_file"
+        printf '[INFO] %s applied\n' "$label"
+    elif patch --batch --reverse -d "$OPENVELA_ROOT/nuttx" -p1 --dry-run --silent < "$patch_file"; then
+        printf '[INFO] %s already applied\n' "$label"
+    else
+        fail "NuttX source differs from both the recorded base and %s; stop and inspect it" "$label"
+    fi
+}
+
+apply_optional_nuttx_patch() {
+    local label="$1"
+    local patch_file="$2"
+
+    printf '[INFO] Checking optional %s\n' "$label"
+    if patch --batch --forward -d "$OPENVELA_ROOT/nuttx" -p1 --dry-run --silent < "$patch_file"; then
+        patch --batch --forward -d "$OPENVELA_ROOT/nuttx" -p1 --silent < "$patch_file"
+        printf '[INFO] %s applied\n' "$label"
+    elif patch --batch --reverse -d "$OPENVELA_ROOT/nuttx" -p1 --dry-run --silent < "$patch_file"; then
+        printf '[INFO] %s already applied\n' "$label"
+    else
+        printf '[INFO] %s not needed\n' "$label"
+    fi
+}
+
+apply_nuttx_patch "HomeMind NuttX patch" "$NUTTX_PATCH"
+apply_optional_nuttx_patch "EYE bringup placement repair" "$NUTTX_MEDIA_REPAIR_PATCH"
+apply_nuttx_patch "HomeMind EYE media patch" "$NUTTX_MEDIA_PATCH"
+
+install -D -m 0644 "$NUTTX_MEDIA_SOURCE" "$NUTTX_MEDIA_DEST"
+printf '[INFO] Installed EYE camera board source\n'
 
 printf '[INFO] HomeMind sources are installed\n'

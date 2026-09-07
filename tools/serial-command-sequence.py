@@ -9,6 +9,9 @@ import time
 import serial
 
 
+PROMPT_RE = re.compile(rb"(?:^|[\r\n])(?:nsh|vela)>[ \t]*(?:\r|\n|$)")
+
+
 def read_for(port: serial.Serial, seconds: float) -> bytes:
     deadline = time.monotonic() + seconds
     data = bytearray()
@@ -25,7 +28,11 @@ def read_until_prompt(port: serial.Serial, timeout: float) -> bytes:
         chunk = port.read(4096)
         if chunk:
             data.extend(chunk)
-            if b"nsh>" in data or b"vela>" in data:
+            # The terminal echoes the submitted command as `vela> command`.
+            # Only accept a prompt that ends a line, otherwise a long-running
+            # command such as net_test can be reported as complete early.
+            clean = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", bytes(data))
+            if PROMPT_RE.search(clean):
                 return bytes(data)
     return bytes(data)
 
@@ -41,6 +48,12 @@ def main() -> int:
         default=45.0,
         help="maximum time to wait for nsh> or vela> after each command",
     )
+    parser.add_argument(
+        "--fixed-delay",
+        type=float,
+        default=0.0,
+        help="after each command, read for this many seconds instead of syncing on a prompt",
+    )
     args = parser.parse_args()
 
     command_path = Path(args.command_file)
@@ -53,6 +66,10 @@ def main() -> int:
         port.write(b"\r\n")
         port.flush()
         output.extend(read_for(port, 2))
+        # The blank line above can leave a fresh `vela>` prompt queued after
+        # the initial read window.  Discard that prompt before the first
+        # command so read_until_prompt cannot advance one command early.
+        port.reset_input_buffer()
 
         for command in commands:
             command = command.strip()
@@ -63,7 +80,13 @@ def main() -> int:
                 continue
             port.write(command.encode("utf-8") + b"\r\n")
             port.flush()
-            output.extend(read_until_prompt(port, args.command_timeout))
+            if args.fixed_delay > 0:
+                output.extend(read_for(port, args.fixed_delay))
+            else:
+                output.extend(read_until_prompt(port, args.command_timeout))
+
+        if args.fixed_delay > 0:
+            output.extend(read_for(port, 1))
 
     text = output.decode("utf-8", "replace")
     text = re.sub(r"(wapi\s+psk\s+\S+\s+)\S+", r"\1<redacted>", text)

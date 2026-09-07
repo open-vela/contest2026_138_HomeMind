@@ -50,6 +50,8 @@
 #define BLINK_PERIOD    8      /* one closed-eye tick every 8s */
 #define BLINK_PHASE     7
 
+static int g_lcd_hold;
+
 /* ── RGB565 palette (DESIGN.md "Calm Tech") ───────────────────── */
 #define C_BG     0x0863u  /* #0A0E1A background               */
 #define C_S1     0x10C5u  /* #121A2E header bar               */
@@ -669,6 +671,11 @@ static void *display_thread(void *arg)
         bool led = read_led();
         bool blink = (tick % BLINK_PERIOD) == BLINK_PHASE;
 
+        if (g_lcd_hold) {
+            tick++;
+            sleep(TICK_INTERVAL_S);
+            continue;
+        }
         if (first || wifi != g_lcd.wifi || llm != g_lcd.llm ||
             led != g_lcd.led || blink != prev_blink) {
             g_lcd.wifi = wifi;
@@ -684,9 +691,33 @@ static void *display_thread(void *arg)
     return NULL; /* not reached */
 }
 
+int hm_lcd_release(void)
+{
+    g_lcd_hold = 0;
+    return 0;
+}
+
 /* ── public interface ─────────────────────────────────────────── */
 
 int hm_lcd_display_start(void)
 {
     return agent_task_create(display_thread, "hm_lcddisp", 6144, NULL, 60);
+}
+
+/* ── HomeMind voice flow indicator（voice 流程期间接管屏幕）────── */
+int hm_lcd_show_text(const char *s)
+{
+    struct fb_area_s area;
+
+    if (g_lcd.fd <= 0)
+        return -1;
+    g_lcd_hold = 1;
+    fill_rect(0, 0, g_lcd.w - 1, g_lcd.h - 1, C_BG);
+    draw_latin_centered(s, g_lcd.w / 2, 96, C_HI, 2);
+    area.x = 0;
+    area.y = 0;
+    area.w = g_lcd.w;
+    area.h = g_lcd.h;
+    ioctl(g_lcd.fd, FBIO_UPDATE, (unsigned long)((uintptr_t)&area));
+    return 0;
 }
