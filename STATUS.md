@@ -53,7 +53,8 @@
 - **家庭 FastAPI+SQLite（homemind-api）已部署并自启**（127.0.0.1:8001）：复用云端 C1 实现 backend/api/app，独立目录 /home/hfy/homemind-backend（venv + .env 0600 + systemd），数据 /home/hfy/homemind-data/homemind.db（users/device_bindings/commands/device_status）。
 - **端到端验收通过**：JWT 鉴权 → 绑定 esp32s3-eye → 下发 led.on（queued）→ 本地 MQTT 旁路收到命令 JSON → SQLite 落库。证据 [2026-09-07_home_backend_e2e.md](docs/evidence/2026-09-07_home_backend_e2e.md)（提交 c636d5\）。
 - **迁移前置备份完成**：/home/hfy/backups/2026-09-07-migration-pre/（网关 .env 0600 + 网关代码 + HA config 快照 + HA DB online backup 5MB）。
-- **待办（09-08 起）**：Mosquitto 放行 LAN + 密码认证；板端接入 device/{id}/cmd 与 ack/status 回传；网关新增本地 MQTT 目标（注意 gateway_agent.py 现场版与官方仓版播报重试差异，以官方仓版为基线）；家庭 /v1/intents|events|tasks|assets；迁移核对后停公网业务写入。
+- **第二步已完成（提交 4c2a71\）**：Mosquitto 放行 LAN 0.0.0.0:1883 + 密码认证（home-gateway/home-api，匿名拒绝验证）；API 支持 MQTT 凭据（config.py/mqtt_client.py 向后兼容）；网关双 MQTT 连接（官方仓版基线统一+播报重试，LOCAL_MQTT_* 配置，云端保留）；**板端全链路闭环验收**：API 下发 led.on → 本地 MQTT → 网关 → 串口执行 → 板子 LED 点亮 → ack done → SQLite（status=done，acked→done 49ms），TTL 过期扫描生效。
+- **待办（09-08 起）**：家庭业务接口 /v1/intents|events|tasks|assets 落地；Mosquitto ACL 收敛；迁移核对后停公网业务写入。
 - 边界：官方仓 backend 未改（复制部署）；网关/HA/公网入口未动。
 
 
