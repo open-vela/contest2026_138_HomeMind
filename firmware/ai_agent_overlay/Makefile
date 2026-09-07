@@ -22,6 +22,9 @@ include $(APPDIR)/Make.defs
 
 MODULE = $(CONFIG_EXAMPLES_AI_AGENT_VELA)
 
+# Compile .cc as C++ (tflite-micro style sources)
+CXXEXT := .cc
+
 # Include paths
 
 CFLAGS += ${INCDIR_PREFIX}$(CURDIR)/include
@@ -131,6 +134,19 @@ CSRCS += src/voice/volc_tts_ws.c
 CSRCS += src/voice/volc_asr.c
 CSRCS += src/voice/audio_capture.c
 CSRCS += src/voice/audio_playback.c
+endif
+
+# vision/ - 端侧 TFLM 人员检测（WP C，断公网可用）
+ifeq ($(CONFIG_TFLITEMICRO),y)
+CXXSRCS += src/vision/person_detect.cc
+CXXSRCS += src/vision/person_detect_model_data.cc
+CXXFLAGS += ${INCDIR_PREFIX}$(CURDIR)/src
+CXXFLAGS += ${INCDIR_PREFIX}$(APPDIR)/mlearning/tflite-micro/tflite-micro
+CXXFLAGS += ${INCDIR_PREFIX}$(APPDIR)/math/gemmlowp/gemmlowp
+CXXFLAGS += ${INCDIR_PREFIX}$(APPDIR)/math/kissfft/kissfft
+CXXFLAGS += ${INCDIR_PREFIX}$(APPDIR)/math/ruy/ruy
+CXXFLAGS += -DTFLITE_EMULATE_FLOAT
+CXXFLAGS += -DTF_LITE_DISABLE_X86_NEON
 endif
 
 # infra/ - 基础设施
