@@ -42,6 +42,8 @@ def _connect_loop():
     while True:
         try:
             with _connect_lock:
+                if settings.MQTT_USERNAME:
+                    client.username_pw_set(settings.MQTT_USERNAME, settings.MQTT_PASSWORD)
                 client.connect(settings.MQTT_BROKER_HOST, settings.MQTT_BROKER_PORT, 60)
                 client.loop_start()
             logger.info("mqtt connected to %s:%s", settings.MQTT_BROKER_HOST, settings.MQTT_BROKER_PORT)
