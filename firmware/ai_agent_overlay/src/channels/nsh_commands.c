@@ -353,8 +353,63 @@ static void cmd_set_media(int argc, char **argv)
     printf("media endpoint saved: %s:%s (token saved)\n", argv[1], argv[2]);
 }
 
+#ifdef CONFIG_TFLITEMICRO
+/* 端侧 TFLM 人员检测（断公网可用），实现见 src/vision/person_detect.cc */
+int hm_person_detect_init(int arena_size);
+int hm_person_detect_run(const unsigned char *rgb565, int w, int h,
+                         float threshold, float *score, float *latency_ms);
+#endif
+
 static void cmd_vision(int argc, char **argv)
 {
+#ifdef CONFIG_TFLITEMICRO
+    /* 端侧离线推理：vision local [threshold] */
+    if (argc > 1 && strcmp(argv[1], "local") == 0) {
+        static unsigned char *frame = NULL;
+        float threshold = 0.5f;
+        float score = 0.0f;
+        float ms = 0.0f;
+        int rc;
+        int n;
+        int i;
+
+        for (i = 2; i < argc; i++) {
+            char *end = NULL;
+            float v = strtof(argv[i], &end);
+            if (end && *end == '\0' && v > 0.0f && v <= 1.0f)
+                threshold = v;
+        }
+
+        rc = hm_person_detect_init(0);
+        if (rc != 0) {
+            printf("[Vision-ERR]: person detect init failed rc=%d\n", rc);
+            return;
+        }
+
+        if (!frame)
+            frame = malloc(HM_MEDIA_FRAME_BYTES);
+        if (!frame) {
+            printf("[Vision-ERR]: alloc failed\n");
+            return;
+        }
+        printf("[Vision-local]: capturing frame...\n");
+        n = hm_media_capture_rgb565(frame, HM_MEDIA_FRAME_BYTES);
+        if (n != HM_MEDIA_FRAME_BYTES) {
+            printf("[Vision-ERR]: capture failed n=%d\n", n);
+            return;
+        }
+
+        rc = hm_person_detect_run(frame, 320, 240, threshold, &score, &ms);
+        if (rc < 0) {
+            printf("[Vision-ERR]: inference failed rc=%d\n", rc);
+            return;
+        }
+        printf("[Vision-local]: person=%.3f threshold=%.2f %s (latency=%.1fms)\n",
+               score, threshold, rc ? "DETECTED" : "none", ms);
+        return;
+    }
+#endif /* CONFIG_TFLITEMICRO */
+
     char host[64] = "api.hfy-ai.cloud";
     char port[8] = "443";
     char token[128] = "";
