@@ -16,6 +16,10 @@ from .ws_hub import push_event
 
 logger = logging.getLogger("mqtt")
 
+# 入口转发：relay 响应 topic（RELAY_MODE 时启用）
+TOPIC_RELAY_RESP = "homemind/relay/resp"
+_handle_relay_resp = None  # 由 main 注入 relay_client.handle_relay_resp，避免循环导入
+
 client = None
 _connect_lock = threading.Lock()
 
@@ -42,8 +46,6 @@ def _connect_loop():
     while True:
         try:
             with _connect_lock:
-                if settings.MQTT_USERNAME:
-                    client.username_pw_set(settings.MQTT_USERNAME, settings.MQTT_PASSWORD)
                 client.connect(settings.MQTT_BROKER_HOST, settings.MQTT_BROKER_PORT, 60)
                 client.loop_start()
             logger.info("mqtt connected to %s:%s", settings.MQTT_BROKER_HOST, settings.MQTT_BROKER_PORT)
@@ -69,6 +71,9 @@ def on_connect(cli, userdata, flags, rc):
     logger.info("mqtt connected rc=%s", rc)
     cli.subscribe("device/+/ack")
     cli.subscribe("device/+/status")
+    if settings.RELAY_MODE:
+        cli.subscribe(TOPIC_RELAY_RESP)
+        logger.info("relay 模式：已订阅 %s", TOPIC_RELAY_RESP)
 
 
 def on_message(cli, userdata, msg):
@@ -77,6 +82,10 @@ def on_message(cli, userdata, msg):
         payload = json.loads(msg.payload.decode())
     except Exception as e:
         logger.warning("bad mqtt msg %s: %s", topic, e)
+        return
+    if topic == TOPIC_RELAY_RESP:
+        if _handle_relay_resp is not None:
+            _handle_relay_resp(payload)
         return
     parts = topic.split("/")
     if len(parts) != 3:
