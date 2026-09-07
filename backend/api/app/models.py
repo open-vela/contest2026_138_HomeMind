@@ -54,3 +54,63 @@ class DeviceStatus(Base):
     mihome_entities = Column(Text, default="")
     last_seen = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow)
+
+
+class Intent(Base):
+    """家庭意图：语义理解结果记录（工作包 B / C1.0）。"""
+    __tablename__ = "intents"
+    id = Column(Integer, primary_key=True)
+    intent_id = Column(String(36), unique=True, index=True)
+    user_id = Column(String(36), index=True)
+    text = Column(Text, default="")
+    intent_type = Column(String(32), default="")       # 如 task.create / device.control
+    action = Column(String(32), default="")
+    entities = Column(Text, default="{}")              # JSON
+    params = Column(Text, default="{}")                # JSON
+    status = Column(String(16), default="pending")     # pending/handled/rejected
+    device_id = Column(String(64), default="")
+    reason = Column(Text, default="")                  # 拒绝原因等
+    created_at = Column(DateTime, default=utcnow)
+    handled_at = Column(DateTime, nullable=True)
+
+
+class HomeEvent(Base):
+    """家庭感知事件：时间/来源设备/事件类型与载荷（工作包 B）。"""
+    __tablename__ = "home_events"
+    id = Column(Integer, primary_key=True)
+    event_id = Column(String(36), unique=True, index=True)
+    device_id = Column(String(64), index=True)
+    source = Column(String(32), default="")            # vision/voice/sensor/mqtt/manual
+    event_type = Column(String(48), index=True)        # person_detected / motion / wake_word ...
+    payload = Column(Text, default="{}")               # JSON
+    created_at = Column(DateTime, default=utcnow, index=True)
+
+
+class Task(Base):
+    """家庭待办/日程：到期时间、家庭时区、提醒与完成状态（工作包 B）。"""
+    __tablename__ = "tasks"
+    id = Column(Integer, primary_key=True)
+    task_id = Column(String(36), unique=True, index=True)
+    user_id = Column(String(36), index=True)
+    title = Column(String(256), default="")
+    note = Column(Text, default="")
+    due_at = Column(DateTime, nullable=True)
+    timezone = Column(String(32), default="Asia/Shanghai")
+    remind_at = Column(DateTime, nullable=True)
+    status = Column(String(16), default="pending")     # pending/done/cancelled
+    created_at = Column(DateTime, default=utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+
+class Asset(Base):
+    """家庭资产：记录与授权查询/更新（工作包 B；不整体发送 MiMo）。"""
+    __tablename__ = "assets"
+    id = Column(Integer, primary_key=True)
+    asset_id = Column(String(36), unique=True, index=True)
+    name = Column(String(128), default="")
+    category = Column(String(64), default="")
+    location = Column(String(128), default="")
+    attributes = Column(Text, default="{}")            # JSON
+    owner = Column(String(36), default="")
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow)

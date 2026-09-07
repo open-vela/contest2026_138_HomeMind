@@ -57,6 +57,16 @@
 - .env 追加：`LOCAL_MQTT_HOST=127.0.0.1 / LOCAL_MQTT_PORT=1883 / LOCAL_MQTT_USER=home-gateway / LOCAL_MQTT_PASS=…`（云端 MQTT_USER/PASS/TLS 配置保留，双连接并存）。
 - 重启后日志：`串口会话已就绪（/dev/ttyACM0 @ 115200）` + `本地 MQTT 已启动：127.0.0.1:1883（用户 home-gateway）` + 云端/本地各 `已连接 MQTT 并订阅`。
 
+### 1.5 家庭业务接口 /v1/intents|events|tasks|assets（工作包 B 第三步）
+- **模型**（models.py 新增 4 表）：`intents`（意图记录+白名单拒绝原因）、`home_events`（感知事件：来源/类型/载荷）、`tasks`（待办/日程：到期时间/家庭时区/提醒/完成状态）、`assets`（家庭资产：类别/位置/属性，不整体发送 MiMo）。
+- **路由**（routers/ 新增 4 文件，均 JWT 鉴权）：
+  - `POST/GET /v1/intents`：创建意图（动作白名单校验，未知动作标记 rejected 并保留 reason）；查询支持 status/limit
+  - `POST/GET /v1/events`：创建感知事件（source=vision/voice/sensor/mqtt/manual）；按 device_id/event_type/source 过滤查询
+  - `POST/GET/PATCH /v1/tasks`：创建待办（due_at/remind_at 解析、remind≤due 校验、时区默认 Asia/Shanghai）；状态流转 pending→done/cancelled（completed_at 记录）
+  - `POST/GET/PATCH /v1/assets`：资产记录与按需更新（attributes 局部更新）
+- **验收（2026-09-07 14:23）**：全部通过——意图 pending 创建、`door.unlock` 拒绝（reason=action not allowed）、person_detected 事件落库、待办含提醒创建+流转 done、资产按 category 查询；SQLite 现有 8 表（+assets/commands/device_bindings/device_status/home_events/intents/tasks/users）。
+- 部署：官方仓 backend/api/app 实现 → 同步家庭副本 `/home/hfy/homemind-backend/app/` → 重启 homemind-api（active，MQTT rc=0）。
+
 ## 2. 部署清单（家庭主机现状，2026-09-07 14:00）
 
 | 服务 | 端口 | 状态 | 数据/配置 |
@@ -74,5 +84,5 @@
 ## 4. 边界与后续（未越界）
 
 - 官方仓 `backend/` 的**功能增强已提交**（config.py/mqtt_client.py 的 MQTT 凭据支持、gateway_agent.py 的本地 MQTT 双连接）——均为向后兼容（不配置即原行为）；网关 / HA / 公网入口的**运行状态**均未回退，HA 未动。
-- 后续（09-08 起）：家庭业务接口 /v1/intents、/v1/events、/v1/tasks、/v1/assets 落地；Mosquitto ACL 收敛（当前认证用户可读写全部 topic，家庭 LAN 可接受）；迁移核对后停公网业务写入并收敛云端连接。
+- 后续（09-08 起）：语义理解接入（MiMo 必要文本 → /v1/intents，工作包 E 落位）；Mosquitto ACL 收敛（当前认证用户可读写全部 topic，家庭 LAN 可接受）；迁移核对后停公网业务写入并收敛云端连接。
 - 已知差异待办：**已解决**——gateway_agent.py 现场版与官方仓版（播报重试）差异已以官方仓版为基线统一，现场运行版备份保留。
