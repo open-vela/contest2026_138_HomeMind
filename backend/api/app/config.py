@@ -25,6 +25,9 @@ class Settings:
         # 内部 MQTT（docker 网络内明文 1883）；设备/网关走外部 8883 TLS
         self.MQTT_BROKER_HOST = os.getenv("MQTT_BROKER_HOST", "mqtt")
         self.MQTT_BROKER_PORT = int(os.getenv("MQTT_BROKER_PORT", "1883"))
+        # 家庭侧本地 broker 启用密码认证后使用；为空则匿名（兼容云端内网明文）
+        self.MQTT_USERNAME = os.getenv("MQTT_USERNAME", "")
+        self.MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "")
 
         # 第一版默认绑定设备（与设备侧已验证工具对应）
         self.DEMO_DEVICE_ID = os.getenv("DEMO_DEVICE_ID", "esp32s3-eye")
