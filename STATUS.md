@@ -1,4 +1,4 @@
-# HomeMind 当前状态
+﻿# HomeMind 当前状态
 
 > 文档更新：2026-09-07（工作包 A 版本归集与音频排障）；项目事实截止：2026-09-07。唯一当前摘要为本节；下方历史记录保留原文，其过期结论不作为当前任务。
 
@@ -46,6 +46,16 @@
 - **BIN 差异解释**：`a0029225…`（09-06 现场视觉验收）≠ `8cf605d9…`（09-03 媒体探针版，`clean-build-entry.log` 留痕）≠ `c8a373e6…`（09-06 15:01 最新构建，含视觉+语音）。差异来自 09-06 现场加入视觉命令/媒体配置后的重新构建与烧录；09-03 的 `8cf605d9` 已由 `clean-build-entry.log` 佐证。
 - **PCM 排障记录**（未修复，保留阻塞）：实机复核单缓冲保底路径通过（视频 153600 B、PCM 640 B）。多缓冲/同一 APB 重入队失败的源码根因：① `esp32s3_i2s.c` `i2s_rx_worker` 的 nbytes 统计循环要求"链头描述符带 EOF"才累加，而 RX 描述符 EOF 由硬件只写回最后一个 desc，多 desc 缓冲（4095 B）统计为 0；② `audio.c` 上驱动 `head/tail` 全局记账与重新 open 后会话计数错位，poll 立即返回 `POLLIN|POLLERR`(0x9) 而数据未就绪；③ 次要嫌疑 `i2s_rx_schedule` EOF 匹配时序。修复方向与证据见 `docs/evidence/2026-09-07_pcm_multibuffer_diag.md`。
 - 未执行 push/PR/merge；远端状态不变。
+
+## 2026-09-07 工作包 B 第一步：家庭服务底座搭建与端到端验收（已验收）
+
+- **家庭 Mosquitto 已装并自启**（2.0.11，127.0.0.1:1883）：本地 pub/sub 往返验证通过；配置 /etc/mosquitto/，持久化 /var/lib/mosquitto/。
+- **家庭 FastAPI+SQLite（homemind-api）已部署并自启**（127.0.0.1:8001）：复用云端 C1 实现 backend/api/app，独立目录 /home/hfy/homemind-backend（venv + .env 0600 + systemd），数据 /home/hfy/homemind-data/homemind.db（users/device_bindings/commands/device_status）。
+- **端到端验收通过**：JWT 鉴权 → 绑定 esp32s3-eye → 下发 led.on（queued）→ 本地 MQTT 旁路收到命令 JSON → SQLite 落库。证据 [2026-09-07_home_backend_e2e.md](docs/evidence/2026-09-07_home_backend_e2e.md)（提交 c636d5\）。
+- **迁移前置备份完成**：/home/hfy/backups/2026-09-07-migration-pre/（网关 .env 0600 + 网关代码 + HA config 快照 + HA DB online backup 5MB）。
+- **待办（09-08 起）**：Mosquitto 放行 LAN + 密码认证；板端接入 device/{id}/cmd 与 ack/status 回传；网关新增本地 MQTT 目标（注意 gateway_agent.py 现场版与官方仓版播报重试差异，以官方仓版为基线）；家庭 /v1/intents|events|tasks|assets；迁移核对后停公网业务写入。
+- 边界：官方仓 backend 未改（复制部署）；网关/HA/公网入口未动。
+
 
 ## 历史记录（保留原文，过期结论已被后续验收替代）
 
