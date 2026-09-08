@@ -219,8 +219,12 @@ Page({
         this.setMihomeResult(key, '执行中…', null)
         this.watchMihome(key, res.data.command_id, 0)
       } else {
-        const detail = (res.data && res.data.detail) ? String(res.data.detail) : ('HTTP ' + res.statusCode)
-        this.setMihomeResult(key, '下发被拒: ' + detail, false)
+        if (res.statusCode === 403) {
+          this.setMihomeResult(key, '演示模式：此操作不可用', false)
+        } else {
+          const detail = (res.data && res.data.detail) ? String(res.data.detail) : ('HTTP ' + res.statusCode)
+          this.setMihomeResult(key, '下发被拒: ' + detail, false)
+        }
       }
     }).catch((err) => {
       this.setMihomeResult(key, '下发失败: ' + err.message, false)

@@ -35,7 +35,22 @@ def send_command(device_id: str, req: CmdReq,
                 status_code=400,
                 detail=f"action not allowed: {req.action}. allowed={settings.ALLOWED_ACTIONS}")
 
-        ttl = int(req.params.get("ttl", settings.COMMAND_TTL_SEC))
+        # 演示/审核模式：演示设备对非受信任用户只开放安全动作，
+        # 默认禁止 mihome.set_power，防止陌生人控制家庭真实电器。
+        if (settings.DEMO_MODE and device_id == settings.DEMO_DEVICE_ID
+                and user_id not in settings.TRUSTED_USER_IDS):
+            if req.action not in settings.DEMO_ALLOWED_ACTIONS:
+                logger.info("demo mode blocked action=%s user=%s", req.action, user_id)
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"demo mode: action not permitted: {req.action}. "
+                           f"allowed={settings.DEMO_ALLOWED_ACTIONS}")
+
+        raw_ttl = req.params.get("ttl", settings.COMMAND_TTL_SEC)
+        if (isinstance(raw_ttl, bool) or not isinstance(raw_ttl, int)
+                or not 1 <= raw_ttl <= max(settings.COMMAND_TTL_SEC, 300)):
+            raise HTTPException(status_code=400, detail="ttl must be an integer between 1 and 300 seconds")
+        ttl = raw_ttl
         cid = uuid.uuid4().hex
         cmd = Command(
             command_id=cid, user_id=user_id, device_id=device_id,

@@ -100,3 +100,55 @@ def test_missing_configuration_is_disabled_without_network_call():
         raise AssertionError("missing configuration must fail closed")
     assert called == []
 
+
+
+def test_set_power_survives_service_error_and_confirms_via_state():
+    """HA may answer 500 (slow BLE device) yet the command applies: the
+    adapter must fall back to state polling instead of failing immediately."""
+    reads = {"n": 0}
+    state = {"switch.balcony": "off"}
+
+    def opener(request, timeout):
+        if request.get_method() == "POST":
+            raise OSError("simulated HA 500: 设备操作超时")
+        reads["n"] += 1
+        if reads["n"] >= 2:
+            state["switch.balcony"] = "on"  # device executes late
+        return FakeResponse({
+            "entity_id": "switch.balcony",
+            "state": state["switch.balcony"],
+            "attributes": {},
+        })
+
+    adapter = HomeAssistantMiHomeAdapter(
+        "http://ha.local", "test-token", ["switch.balcony"], opener=opener
+    )
+    assert adapter.execute(
+        "mihome.set_power", {"entity_id": "switch.balcony", "on": True}
+    ) == {"ok": True, "entity_id": "switch.balcony", "state": "on"}
+
+
+def test_set_power_fails_when_state_never_confirms(monkeypatch):
+    import pytest
+
+    import mihome_adapter as mod
+
+    monkeypatch.setattr(mod, "_CONFIRM_WINDOW_S", 0.3)
+    monkeypatch.setattr(mod, "_CONFIRM_INTERVAL_S", 0.05)
+
+    def opener(request, timeout):
+        if request.get_method() == "POST":
+            raise OSError("simulated HA 500")
+        return FakeResponse({
+            "entity_id": "switch.balcony",
+            "state": "off",  # device never applies the command
+            "attributes": {},
+        })
+
+    adapter = HomeAssistantMiHomeAdapter(
+        "http://ha.local", "test-token", ["switch.balcony"], opener=opener
+    )
+    with pytest.raises(MiHomeError):
+        adapter.execute(
+            "mihome.set_power", {"entity_id": "switch.balcony", "on": True}
+        )

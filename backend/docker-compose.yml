@@ -29,6 +29,9 @@ services:
       - MQTT_BROKER_HOST=mqtt
       - MQTT_BROKER_PORT=1883
       - DEMO_DEVICE_ID=${DEMO_DEVICE_ID:-esp32s3-eye}
+      - DEMO_MODE=${DEMO_MODE:-false}
+      - TRUSTED_USER_IDS=${TRUSTED_USER_IDS:-}
+      - DEMO_ALLOWED_ACTIONS=${DEMO_ALLOWED_ACTIONS:-led.on,led.off,device.info,mihome.get_state}
       - ALLOWED_ACTIONS=${ALLOWED_ACTIONS:-led.on,led.off,device.info}
       - MEDIA_TOKEN=${MEDIA_TOKEN:-}
       - MIMO_API_KEY=${MIMO_API_KEY:-}
