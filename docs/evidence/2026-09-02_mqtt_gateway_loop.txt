@@ -1,0 +1,22 @@
+HomeMind MQTT gateway loop — 2026-09-02
+
+Scope
+- This is a real broker-to-device test, not a mocked MQTT test and not a database-only test.
+- The Ubuntu gateway at the household host ran the checked-in `gateway_agent.py` plus `command_policy.py` after remote syntax/import validation.
+- The test publisher used the gateway's configured TLS MQTT endpoint and observed the device topics without printing credentials.
+
+Observed results
+- `led.on`: ACK sequence `acked`, `done`; elapsed about 201 ms; latest status `led=on`.
+- `led.off`: ACK sequence `acked`, `done`; elapsed about 201 ms; latest status `led=off`.
+- Final result: `MQTT_REAL_LOOP=PASS`.
+
+Code gates exercised
+- command ID, action, timestamp, and TTL validation;
+- action allowlist and stale/future command rejection;
+- in-process duplicate suppression for MQTT QoS 1 redelivery;
+- `done` is emitted only after serial output confirms the requested LED JSON state;
+- failed serial output produces `expired`, and LED state is not updated optimistically.
+
+Boundary
+- This evidence proves the broker → household gateway → `/dev/ttyACM0` → ai_agent → onboard LED → MQTT ACK/status segment.
+- It does not prove the public FastAPI database update, WSS delivery, WeChat real-device login, or a real MiHome device. Those remain separate acceptance gates.
