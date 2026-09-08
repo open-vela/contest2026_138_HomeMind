@@ -147,6 +147,8 @@ CXXFLAGS += ${INCDIR_PREFIX}$(APPDIR)/math/kissfft/kissfft
 CXXFLAGS += ${INCDIR_PREFIX}$(APPDIR)/math/ruy/ruy
 CXXFLAGS += -DTFLITE_EMULATE_FLOAT
 CXXFLAGS += -DTF_LITE_DISABLE_X86_NEON
+# 与 tflm 库编译宏保持一致，避免 MicroPrintf 符号缺失
+CXXFLAGS += -DTF_LITE_STRIP_ERROR_STRINGS
 endif
 
 # infra/ - 基础设施

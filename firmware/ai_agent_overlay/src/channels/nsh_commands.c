@@ -59,6 +59,7 @@
 #endif
 
 #include <malloc.h>
+#include <pthread.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -228,14 +229,21 @@ static int hm_media_capture_rgb565(unsigned char *out, int out_len)
     int streaming = 0;
     int copied = -1;
     int i;
-    unsigned char *frames[3] = { NULL, NULL, NULL };
+    size_t buf_len = (size_t)out_len + 2048;  /* DMA 越界防护 padding */
+
+    /* [WP-C 2026-09-08] 摄像头缓冲改为「一次分配、永不释放」。
+     * 原实现每次 capture 都 memalign/free 三块 ~152KB：若 close() 后 GDMA
+     * 仍在写（或写越界），free 之后落到堆上的数据会破坏 kmm 元数据，
+     * 表现为下一次 malloc 直接卡死。常驻缓冲彻底消除该类破坏。 */
+    static unsigned char *frames[3] = { NULL, NULL, NULL };
 
     video_fd = open(video_path, O_RDWR | O_NONBLOCK);
     if (video_fd < 0)
         return -1;
 
     for (i = 0; i < 3; i++)
-        frames[i] = memalign(32, out_len);
+        if (!frames[i])
+            frames[i] = (unsigned char *)memalign(32, buf_len);
     if (!frames[0] || !frames[1] || !frames[2])
         goto out;
 
@@ -261,7 +269,7 @@ static int hm_media_capture_rgb565(unsigned char *out, int out_len)
         buf.type = type;
         buf.memory = V4L2_MEMORY_USERPTR;
         buf.m.userptr = (uintptr_t)frames[buf.index];
-        buf.length = out_len;
+        buf.length = buf_len;
         if (ioctl(video_fd, VIDIOC_QBUF, (uintptr_t)&buf) < 0)
             goto out;
     }
@@ -292,9 +300,7 @@ static int hm_media_capture_rgb565(unsigned char *out, int out_len)
 out:
     if (streaming)
         ioctl(video_fd, VIDIOC_STREAMOFF, (uintptr_t)&type);
-    for (i = 0; i < 3; i++)
-        if (frames[i])
-            free(frames[i]);
+    /* 缓冲常驻，此处不再 free（见上方说明） */
     close(video_fd);
     return copied;
 }
@@ -358,6 +364,8 @@ static void cmd_set_media(int argc, char **argv)
 int hm_person_detect_init(int arena_size);
 int hm_person_detect_run(const unsigned char *rgb565, int w, int h,
                          float threshold, float *score, float *latency_ms);
+void hm_pd_heap_probe(const char *tag);
+int hm_person_detect_ready(void);
 #endif
 
 static void cmd_vision(int argc, char **argv)
@@ -380,24 +388,32 @@ static void cmd_vision(int argc, char **argv)
                 threshold = v;
         }
 
-        rc = hm_person_detect_init(0);
-        if (rc != 0) {
-            printf("[Vision-ERR]: person detect init failed rc=%d\n", rc);
-            return;
-        }
-
         if (!frame)
             frame = malloc(HM_MEDIA_FRAME_BYTES);
         if (!frame) {
             printf("[Vision-ERR]: alloc failed\n");
             return;
         }
+
+        /* 正确顺序：init -> capture -> run。
+         * 堆探针贯穿全程，卡死时 /data/pd.log 可定位到具体阶段。 */
+        hm_pd_heap_probe("pre-init");
+        rc = hm_person_detect_init(0);
+        hm_pd_heap_probe("post-init");
+        if (rc != 0) {
+            printf("[Vision-ERR]: person detect init failed rc=%d\n", rc);
+            return;
+        }
+
         printf("[Vision-local]: capturing frame...\n");
+        hm_pd_heap_probe("pre-capture");
         n = hm_media_capture_rgb565(frame, HM_MEDIA_FRAME_BYTES);
+        hm_pd_heap_probe("post-capture");
         if (n != HM_MEDIA_FRAME_BYTES) {
             printf("[Vision-ERR]: capture failed n=%d\n", n);
             return;
         }
+        printf("[Vision-local]: capture ok, running inference...\n");
 
         rc = hm_person_detect_run(frame, 320, 240, threshold, &score, &ms);
         if (rc < 0) {
@@ -2319,6 +2335,8 @@ static void* cli_thread(void* arg)
     (void)arg;
     char line[LINE_LEN];
     char* argv[MAX_ARGS];
+    printf("[CLI] thread stack=%p\n", (void *)&line);
+    fflush(stdout);
 
     syslog(LOG_INFO, "[%s] NSH CLI started. Type 'help' for commands.\n", TAG);
     pthread_mutex_lock(&g_stdout_lock);
@@ -2540,7 +2558,21 @@ int nsh_commands_init(void)
     return OK;
 }
 
+/* [WP-C FIX] CLI 线程栈固定放 DRAM（.bss），避免 cache-suspend 窗口内
+ * PSRAM 栈不可达导致的随机挂死（XIP 模型读 / littlefs 写期间）。 */
+static uint8_t g_cli_stack[AGENT_CLI_STACK] __attribute__((aligned(16)));
+
 int nsh_commands_start(void)
 {
-    return agent_task_create(cli_thread, "agent_cli", AGENT_CLI_STACK, NULL, AGENT_CLI_PRIO);
+    pthread_attr_t attr;
+    pthread_t tid;
+    pthread_attr_init(&attr);
+    pthread_attr_setstack(&attr, g_cli_stack, sizeof(g_cli_stack));
+    int rc = pthread_create(&tid, &attr, cli_thread, NULL);
+    pthread_attr_destroy(&attr);
+    if (rc != 0) {
+        syslog(LOG_ERR, "[nsh] cli thread create failed rc=%d\n", rc);
+        return -1;
+    }
+    return 0;
 }
