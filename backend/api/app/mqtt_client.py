@@ -16,6 +16,10 @@ from .ws_hub import push_event
 
 logger = logging.getLogger("mqtt")
 
+# 入口转发：relay 响应 topic（RELAY_MODE 时启用）
+TOPIC_RELAY_RESP = "homemind/relay/resp"
+_handle_relay_resp = None  # 由 main 注入 relay_client.handle_relay_resp，避免循环导入
+
 client = None
 _connect_lock = threading.Lock()
 
@@ -67,6 +71,9 @@ def on_connect(cli, userdata, flags, rc):
     logger.info("mqtt connected rc=%s", rc)
     cli.subscribe("device/+/ack")
     cli.subscribe("device/+/status")
+    if settings.RELAY_MODE:
+        cli.subscribe(TOPIC_RELAY_RESP)
+        logger.info("relay 模式：已订阅 %s", TOPIC_RELAY_RESP)
 
 
 def on_message(cli, userdata, msg):
@@ -75,6 +82,10 @@ def on_message(cli, userdata, msg):
         payload = json.loads(msg.payload.decode())
     except Exception as e:
         logger.warning("bad mqtt msg %s: %s", topic, e)
+        return
+    if topic == TOPIC_RELAY_RESP:
+        if _handle_relay_resp is not None:
+            _handle_relay_resp(payload)
         return
     parts = topic.split("/")
     if len(parts) != 3:
@@ -107,9 +118,16 @@ def on_message(cli, userdata, msg):
             led = payload.get("led")
             online = payload.get("online", True)
             _upsert_status(db, device_id, online=bool(online), led=led)
+            # 网关上报的米家实体快照（含 friendly_name 与当前状态）；仅接受列表
+            mi = payload.get("mihome_entities")
+            if isinstance(mi, list):
+                st = db.query(DeviceStatus).filter_by(device_id=device_id).first()
+                if st is not None:
+                    st.mihome_entities = json.dumps(mi, ensure_ascii=False)
             db.commit()
             push_event({"type": "status", "device_id": device_id,
-                        "online": bool(online), "led": led})
+                        "online": bool(online), "led": led,
+                        "mihome_entities": mi if isinstance(mi, list) else None})
     except Exception as e:
         logger.error("on_message error: %s", e)
     finally:

@@ -69,6 +69,9 @@ CSRCS += src/tools/tool_fetch_url.c
 CSRCS += src/tools/tool_feishu_doc.c
 CSRCS += src/tools/tool_feishu_chat.c
 CSRCS += src/tools/tool_vision.c
+ifeq ($(CONFIG_AI_AGENT_CAMERA),y)
+CSRCS += src/tools/tool_camera.c
+endif
 CSRCS += src/tools/tool_shell.c
 CSRCS += src/tools/tool_system.c
 CSRCS += src/tools/tool_health.c

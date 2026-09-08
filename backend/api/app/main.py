@@ -6,17 +6,26 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .db import engine, SessionLocal
+from .db import engine, SessionLocal, ensure_sqlite_columns
 from . import models
 from .mqtt_client import start_mqtt
+from . import mqtt_client as mqtt_module
 from .ws_hub import init as ws_init, drain
 from .models import Command
-from .routers import health, auth, devices, commands, ws as ws_router
+from .routers import (health, auth, devices, commands, media,
+                             intents, events, tasks, assets,
+                             ws as ws_router)
 
 logging.basicConfig(level=logging.INFO)
+# httpx/httpcore 在 INFO 级会打印完整请求 URL，而微信 jscode2session 把 AppSecret
+# 放在 query string 里（?...&secret=xxx）——必须压到 WARNING，否则 AppSecret 明文落日志。
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 logger = logging.getLogger("api")
 
 models.Base.metadata.create_all(bind=engine)
+ensure_sqlite_columns()
 
 
 async def expire_sweeper():
@@ -46,6 +55,11 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(drain())
     asyncio.create_task(expire_sweeper())
     start_mqtt()  # 在独立线程跑 MQTT 循环
+    if settings.RELAY_MODE:
+        # 注入 relay 响应处理（mqtt_client 收到 homemind/relay/resp 时回调）
+        from .relay_client import handle_relay_resp
+        mqtt_module._handle_relay_resp = handle_relay_resp
+        logger.info("RELAY_MODE=true：业务路由经家庭出站通道转发")
     yield
 
 
@@ -62,4 +76,15 @@ app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(devices.router)
 app.include_router(commands.router)
+app.include_router(media.router)
+if settings.RELAY_MODE:
+    # 入口转发模式：业务接口经家庭出站通道执行（云端不落业务正文）
+    from .routers import relay_proxy
+    app.include_router(relay_proxy.router)
+else:
+    # 家庭副本：业务接口本地执行
+    app.include_router(intents.router)
+    app.include_router(events.router)
+    app.include_router(tasks.router)
+    app.include_router(assets.router)
 app.include_router(ws_router.router)
