@@ -26,13 +26,42 @@ class Settings:
         self.MQTT_BROKER_HOST = os.getenv("MQTT_BROKER_HOST", "mqtt")
         self.MQTT_BROKER_PORT = int(os.getenv("MQTT_BROKER_PORT", "1883"))
 
+        # 入口转发模式（C1.0）：true 时业务路由经家庭出站通道转发，云端只做入口。
+        # 需云端与家庭共用 JWT_SECRET。
+        self.RELAY_MODE = os.getenv("RELAY_MODE", "false").lower() in ("1", "true", "yes")
+        self.RELAY_TIMEOUT = float(os.getenv("RELAY_TIMEOUT", "20"))
+
         # 第一版默认绑定设备（与设备侧已验证工具对应）
+        # 注意：auth.py 会在用户首次登录时自动绑定该设备，因此"任何人登录即可下发命令"。
         self.DEMO_DEVICE_ID = os.getenv("DEMO_DEVICE_ID", "esp32s3-eye")
+
+        # 演示/审核模式：非受信任用户（如提审审核员）即使已自动绑定演示设备，
+        # 也只能执行 DEMO_ALLOWED_ACTIONS，默认不含 mihome.set_power，
+        # 避免陌生人通过审核环境控制家庭真实电器。
+        self.DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() in ("1", "true", "yes")
+
+        # 受信任用户（拥有完整权限，可控制真实电器），填 user_id，逗号分隔。
+        # user_id 获取方式：小程序设置页/Storage 中的 userId，或云端数据库 users 表。
+        self.TRUSTED_USER_IDS = [
+            u.strip() for u in os.getenv("TRUSTED_USER_IDS", "").split(",") if u.strip()
+        ]
+
+        # 演示模式下允许的动作（只读与安全动作为主，禁止真实电器控制）
+        self.DEMO_ALLOWED_ACTIONS = [
+            a.strip()
+            for a in os.getenv(
+                "DEMO_ALLOWED_ACTIONS", "led.on,led.off,device.info,mihome.get_state",
+            ).split(",")
+            if a.strip()
+        ]
 
         # 命令动作白名单（违反即返工：只开放已验证能力）
         self.ALLOWED_ACTIONS = [
             a.strip()
-            for a in os.getenv("ALLOWED_ACTIONS", "led.on,led.off,device.info").split(",")
+            for a in os.getenv(
+                "ALLOWED_ACTIONS",
+                "led.on,led.off,device.info,mihome.set_power,mihome.get_state",
+            ).split(",")
             if a.strip()
         ]
 

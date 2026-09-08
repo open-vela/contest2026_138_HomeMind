@@ -2,26 +2,17 @@
 
 本目录继续在 Win11 的微信开发者工具中开发，不进入默认 Ubuntu Core 迁移包。
 
-## 当前状态（2026-09-02 更新）：可编译就绪，等待微信真机验收
+## 当前状态（更新 2026-09-07；事实截止 2026-09-06）
 
-C1 小程序侧基础恢复完成：
+**部分完成**：模拟器登录、真实灯光控制与实体自动同步已有[物理闭环记录](../docs/evidence/2026-09-06_miniprogram_mihome_physical.md)和[实体同步记录](../docs/evidence/2026-09-06_mihome_entity_sync.md)。当前多功能房吸顶灯的小程序全链路、手机真机、弱网与权限仍待验证；不再将模拟器登录或米家登录列为未完成。
 
-1. ✅ 5 个页面脚本（index/dashboard/devices/calendar/settings）的语法损坏全部修复
-   （模板字符串反引号、计算属性键、about 弹窗字符串——均为此前 shell 转义损伤），
-   全部通过 esprima JS 语法解析；
-2. ✅ `sitemap.json` 已补齐；tabBar 的 10 个图标（81x81 PNG，普通/选中两色）
-   已生成到 `images/`；
-3. ✅ `app.js` 已删除硬编码局域网地址（`192.168.1.100`），服务地址改为空 +
-   从设置页保存的 Storage 恢复；
-4. ✅ 页面四件套（js/json/wxml/wxss）齐全，所有 JSON 校验通过；
-5. ⏳ `project.config.json` 已填入项目 AppID（AppID 是公开标识，不是 AppSecret），
-   仍需在微信开发者工具完成首次编译和真机验收。
+日程仅存微信本地 Storage。目标为家庭 SQLite 保存事件、待办/日程和资产，小程序跨端同步；家庭业务迁移与模型尚未实现。腾讯云保留远程访问入口且不持久化业务正文是待验收目标，远程数据仍经过公网入口。见 [STATUS](../STATUS.md) 和[家庭服务迁移计划](../docs/C1.0-腾讯云资产与后端计划.md)。
 
-## C1 对接预留（按总体计划 5.5 节）
+## 现有设备接口与迁移方向
 
 - 正式链路：小程序 → 腾讯云 API（HTTPS/WSS）→ 家庭 Ubuntu 主动出站 → 设备；
 - `app.globalData.serverUrl` 默认为 `https://hfy-ai.cloud`，WSS 地址从该 HTTPS 地址派生；
-  设置页仅接受 HTTPS 地址，真机验收前还需确认微信后台合法域名配置；
+  设置页仅接受 HTTPS 地址，合法域名登记已有用户记录，仍需手机回归；
 - 小程序侧不持有 AppSecret、证书私钥、设备主密钥或 MiMo Token；仅在微信 Storage
   保存登录后下发的 access token，未使用的 refresh token 不落盘；
 - **已接入云端**：
@@ -41,13 +32,11 @@ C1 小程序侧基础恢复完成：
 
 ## 待验收项
 
-- 微信开发者工具清洁编译；
-- 云端 API 部署本地最新解绑/TTL 改动；
-- 真机 HTTPS 登录、WSS 状态推送、LED 命令 `acked/done/status` 与失败回显。
+- 当前多功能房吸顶灯小程序全链路，开/关各 10 次并回读真实状态。
+- 手机真机登录、绑定、控制、状态回读、断线重连、弱网及权限。
+- 家庭服务迁移后的 API/WSS、事件/待办/资产同步与服务重启持久化。
+- “我准备睡觉了，明早八点提醒我带钥匙”产生受校验任务，设备和待办结果分别展示。
 
-## 备份命令
+## 备份入口
 
-```powershell
-cd C:\Old\HomeMind
-.\contest2026_138_HomeMind\tools\create-win11-backup.ps1
-```
+使用官方工作副本中的备份工具，参见[工作区说明](../../README_WORKSPACE.md)。旧普通副本已经归档，不再作为当前入口。

@@ -1,0 +1,86 @@
+--- a/boards/xtensa/esp32s3/esp32s3-eye/src/Make.defs
++++ b/boards/xtensa/esp32s3/esp32s3-eye/src/Make.defs
+@@ -45,6 +45,10 @@ ifeq ($(CONFIG_ESP32S3_EYE_LCD),y)
+ CSRCS += esp32s3_board_lcd.c
+ endif
+ 
++ifeq ($(CONFIG_ESP32S3_CAM),y)
++CSRCS += esp32s3_board_camera.c
++endif
++
+ DEPPATH += --dep-path board
+ VPATH += :src
+ 
+--- a/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3-eye.h
++++ b/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3-eye.h
+@@ -16,6 +16,7 @@
+ #include <nuttx/config.h>
+ #include <nuttx/compiler.h>
+ #include <stdint.h>
++#include <stdbool.h>
+ 
+ /****************************************************************************
+  * Pre-processor Definitions
+@@ -98,6 +99,14 @@
+ int board_i2c_init(void);
+ #endif
+ 
++#ifdef CONFIG_ESP32S3_I2S
++int board_i2sdev_initialize(int port, bool enable_tx, bool enable_rx);
++#endif
++
++#ifdef CONFIG_ESP32S3_CAM
++int board_camera_initialize(void);
++#endif
++
+ #endif /* __ASSEMBLY__ */
+ 
+ #endif /* __BOARDS_XTENSA_ESP32S3_ESP32S3_EYE_SRC_ESP32S3_EYE_H */
+--- a/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_bringup.c
++++ b/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_bringup.c
+@@ -42,6 +42,10 @@
+ #  include "esp32s3_i2c.h"
+ #endif
+ 
++#ifdef CONFIG_ESP32S3_I2S
++#  include "esp32s3_i2s.h"
++#endif
++
+ #ifdef CONFIG_WATCHDOG
+ #  include <nuttx/watchdog/watchdog.h>
+ #endif
+@@ -254,6 +258,34 @@ int esp32s3_bringup(void)
+ #endif
+ 
++#ifdef CONFIG_ESP32S3_CAM
++  /* Register the ESP32-S3 LCD_CAM DVP controller and the OV2640 sensor. */
++  ret = board_camera_initialize();
++  if (ret < 0)
++    {
++      syslog(LOG_ERR, "ERROR: Failed to initialize camera: %d\n", ret);
++    }
++#endif
++
++#ifdef CONFIG_ESP32S3_I2S0
++  /* The EYE microphone is an I2S RX-only digital MEMS device. */
++  ret = board_i2sdev_initialize(ESP32S3_I2S0,
++#ifdef CONFIG_ESP32S3_I2S0_TX
++                                 true,
++#else
++                                 false,
++#endif
++#ifdef CONFIG_ESP32S3_I2S0_RX
++                                 true);
++#else
++                                 false);
++#endif
++  if (ret < 0)
++    {
++      syslog(LOG_ERR, "ERROR: Failed to initialize I2S0: %d\n", ret);
++    }
++#endif
++
+   /* If we got here then perhaps not all initialization was successful, but
+    * at least enough succeeded to bring-up NSH with perhaps reduced
+    * capabilities.
+    */

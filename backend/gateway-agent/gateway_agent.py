@@ -15,6 +15,7 @@ import logging
 import paho.mqtt.client as mqtt
 
 from command_policy import CommandPolicy
+from mihome_adapter import HomeAssistantMiHomeAdapter
 
 try:
     import serial
@@ -58,6 +59,7 @@ CMD_MODE = os.getenv("CMD_MODE", "ask")  # ask=经 ai_agent 自然语言；direc
 TOPIC_CMD = f"device/{DEVICE_ID}/cmd"
 TOPIC_ACK = f"device/{DEVICE_ID}/ack"
 TOPIC_STATUS = f"device/{DEVICE_ID}/status"
+TOPIC_SPEAK = f"device/{DEVICE_ID}/speak"
 
 PROMPT = os.getenv("DEVICE_PROMPT", "vela>")
 ENTER_CMD = "ai_agent"  # 从 nsh> 进入 vela> 的命令
@@ -68,8 +70,11 @@ ASK_MAP = {
     "led.off": "关灯",
     "device.info": "上报设备信息",
 }
+MIHOME_ACTIONS = {"mihome.set_power", "mihome.get_state"}
 LED_DESIRED = {"led.on": "on", "led.off": "off"}
-COMMAND_POLICY = CommandPolicy(ASK_MAP.keys(), max_ttl=max(CMD_TTL, 300))
+COMMAND_POLICY = CommandPolicy(
+    tuple(ASK_MAP.keys()) + tuple(MIHOME_ACTIONS), max_ttl=max(CMD_TTL, 300)
+)
 
 
 class SerialExecutor:
@@ -130,6 +135,7 @@ class SerialExecutor:
 
 
 def main():
+    mihome = HomeAssistantMiHomeAdapter.from_env()
     executor = None
     try:
         executor = SerialExecutor(SERIAL_PORT, BAUD, PROMPT, ENTER_CMD)
@@ -152,13 +158,19 @@ def main():
         if rc == 0:
             backoff = 2
             cli.subscribe(TOPIC_CMD)
-            logger.info("已连接 MQTT 并订阅 %s", TOPIC_CMD)
+            cli.subscribe(TOPIC_SPEAK)
+            logger.info("已连接 MQTT 并订阅 %s、%s", TOPIC_CMD, TOPIC_SPEAK)
             cli.publish(TOPIC_STATUS, json.dumps({"online": True,
-                        "led": executor.led_state if executor else "unknown"}), qos=1)
+                        "led": executor.led_state if executor else "unknown",
+                        "mihome": mihome.describe(),
+                        "mihome_entities": mihome.list_entities()}), qos=1)
         else:
             logger.error("MQTT 连接失败 rc=%s", rc)
 
     def on_message(cli, userdata, msg):
+        if msg.topic == TOPIC_SPEAK:
+            _handle_speak(cli, msg)
+            return
         try:
             payload = json.loads(msg.payload.decode())
         except Exception:
@@ -182,13 +194,16 @@ def main():
         # 把串口执行放到独立线程：避免阻塞 MQTT 网络循环（否则会饿死 keepalive、
         # 导致连接掉线重连，且 acked/done 要等串口超时才能发出）。
         def _handle():
-            if executor is None:
-                COMMAND_POLICY.update(cid, "expired")
-                cli.publish(TOPIC_ACK, json.dumps({"command_id": cid, "status": "expired"}), qos=1)
-                return
             try:
                 ttl = int(payload["ttl"])
-                output = executor.exec(action, timeout=max(2, min(CMD_TTL, ttl)))
+                if action in MIHOME_ACTIONS:
+                    result = mihome.execute(action, payload.get("params"))
+                    output = json.dumps(result)
+                else:
+                    if executor is None:
+                        raise RuntimeError("serial executor unavailable")
+                    result = None
+                    output = executor.exec(action, timeout=max(2, min(CMD_TTL, ttl)))
                 lowered = output.lower()
                 if any(marker in lowered for marker in ("unknown command", "error:", "failed", "timeout")):
                     raise RuntimeError("device reported command failure")
@@ -200,13 +215,51 @@ def main():
                     executor.led_state = LED_DESIRED[action]
                 COMMAND_POLICY.update(cid, "done")
                 cli.publish(TOPIC_ACK, json.dumps({"command_id": cid, "status": "done"}), qos=1)
-                cli.publish(TOPIC_STATUS, json.dumps({"online": True, "led": executor.led_state}), qos=1)
+                status = {"online": True,
+                          "led": executor.led_state if executor else "unknown",
+                          "mihome": mihome.describe(),
+                          "mihome_entities": mihome.list_entities()}
+                if result is not None:
+                    status["mihome_result"] = result
+                cli.publish(TOPIC_STATUS, json.dumps(status), qos=1)
             except Exception as e:
                 logger.error("执行命令 %s 失败：%s", cid, e)
                 COMMAND_POLICY.update(cid, "expired")
                 cli.publish(TOPIC_ACK, json.dumps({"command_id": cid, "status": "expired"}), qos=1)
 
         threading.Thread(target=_handle, daemon=True).start()
+
+    def _handle_speak(cli, msg):
+        """device/<id>/speak：{"text": "..."} -> HA notify 实体（小爱音箱播报）。"""
+        try:
+            payload = json.loads(msg.payload.decode())
+        except Exception:
+            return
+        text = payload.get("text") if isinstance(payload, dict) else None
+        if not isinstance(text, str) or not text.strip():
+            logger.warning("speak 消息缺少有效 text")
+            return
+        entity = os.getenv("HOMEMIND_SPEAK_ENTITY", "")
+
+        def _do():
+            last_err = None
+            for attempt in range(2):  # HA 首次调用新 notify 实体可能超时，重试一次
+                try:
+                    result = mihome.notify_text(entity, text)
+                    logger.info("已播报（%s）：%s", entity, text[:60])
+                    cli.publish(TOPIC_STATUS, json.dumps({
+                        "online": True,
+                        "led": executor.led_state if executor else "unknown",
+                        "mihome": mihome.describe(),
+                        "last_speak": text[:120]}), qos=1)
+                    return
+                except Exception as e:
+                    last_err = e
+                    logger.warning("播报第 %d 次失败：%s", attempt + 1, e)
+                    time.sleep(1.5)
+            logger.error("播报最终失败（%s）：%s", entity, last_err)
+
+        threading.Thread(target=_do, daemon=True).start()
 
     client.on_connect = on_connect
     client.on_message = on_message

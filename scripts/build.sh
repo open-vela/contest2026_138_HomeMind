@@ -192,6 +192,98 @@ apply_network_capacity_config() {
     info "Configured UDP connections: 16; UDP/TCP write chains: 64/32; IOB: 64 x 196; TCP delayed ACK: off; separate IMEM heap: 96 KiB"
 }
 
+apply_media_config() {
+    local nuttx_config="$OPENVELA_ROOT/nuttx/.config"
+    require_file "$nuttx_config"
+    command -v kconfig-tweak >/dev/null || {
+        error "kconfig-tweak is required to apply the HomeMind media config"
+        exit 1
+    }
+
+    # ESP32-S3-EYE hardware map: OV2640 DVP camera on LCD_CAM, I2C0 on
+    # GPIO4/5, and the onboard digital microphone on I2S0 RX (BCLK=41,
+    # WS=42, DIN=2).  GPIO15 supplies the OV2640 XCLK through LEDC; the
+    # LEDC default GPIO2 would conflict with the microphone data pin.
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_ESP32S3_CAM
+    # Both LCD_CAM and I2S share the ESP32-S3 DMA implementation. The
+    # snapshot's select chain does not materialize this symbol reliably.
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_ESP32S3_DMA
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_VIDEO_STREAM
+    # Include the stock V4L2 camera exerciser so the flashed image can prove
+    # real frame capture from /dev/video0; it does not enable JPEG or vision.
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_EXAMPLES_CAMERA
+    kconfig-tweak --file "$nuttx_config" --set-str CONFIG_EXAMPLES_CAMERA_PROGNAME camera
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_EXAMPLES_CAMERA_PRIORITY 100
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_EXAMPLES_CAMERA_STACKSIZE 2048
+    # The checked-in EYE OpenSpec requires five V4L2 request buffers; old
+    # defconfigs can leave this generated integer absent even with
+    # VIDEO_STREAM=y, which breaks video/v4l2_cap.c compilation.
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_VIDEO_REQBUFS_COUNT_MAX 5
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_CAM_XCLK_PIN 15
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_CAM_PCLK_PIN 13
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_CAM_VSYNC_PIN 6
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_CAM_HREF_PIN 7
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_CAM_D0_PIN 11
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_CAM_D1_PIN 9
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_CAM_D2_PIN 8
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_CAM_D3_PIN 10
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_CAM_D4_PIN 12
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_CAM_D5_PIN 18
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_CAM_D6_PIN 17
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_CAM_D7_PIN 16
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_ESP32S3_I2C
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_ESP32S3_I2C0
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_ESP32S3_I2C0_MASTER_MODE
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_ESP32S3_I2C_PERIPH_MASTER_MODE
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_ESPRESSIF_I2C_PERIPH_MASTER_MODE
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_I2C0_SCLPIN 5
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_I2C0_SDAPIN 4
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_I2CTIMEOSEC 0
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_I2CTIMEOMS 500
+    # The generic I2S menu owns the public I2S access macros used by
+    # drivers/audio/audio_i2s.c; selecting only the ESP32-S3 lower half
+    # leaves those macros undefined in this OpenVela snapshot.
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_I2S
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_ESP32S3_I2S
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_ESP32S3_I2S0
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_ESP32S3_I2S0_RX
+    # The onboard digital microphone is clocked by the ESP32-S3.  Without
+    # master mode BCLK/WS remain inputs and the RX DMA never reaches EOF.
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_ESP32S3_I2S0_ROLE_MASTER
+    kconfig-tweak --file "$nuttx_config" --disable CONFIG_ESP32S3_I2S0_TX
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_I2S0_BCLKPIN 41
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_I2S0_WSPIN 42
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_I2S0_DINPIN 2
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_I2S0_SAMPLE_RATE 16000
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_ESP32S3_I2S0_DATA_BIT_WIDTH_16BIT
+    # The derived integer symbols are not materialized by olddefconfig in
+    # this OpenVela Kconfig snapshot, although the corresponding choices are
+    # visible in .config. Set them explicitly for the C driver as well.
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_I2S_DMADESC_NUM 2
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_I2S_MAXINFLIGHT 4
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_I2S0_DATA_BIT_WIDTH 16
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_AUDIO
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_AUDIO_FORMAT_PCM
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_AUDIO_I2S
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_DRIVERS_AUDIO
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_ESP32S3_LEDC
+    kconfig-tweak --file "$nuttx_config" --enable CONFIG_ESP32S3_LEDC_TIM0
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_LEDC_TIM0_CHANNELS 1
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_LEDC_CHANNEL0_PIN 15
+    # This LEDC source declares the first four channel pin fields even when
+    # only timer0/channel0 is selected; keep unused fields defined so the
+    # board build is deterministic across Kconfig versions.
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_LEDC_CHANNEL1_PIN 3
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_LEDC_CHANNEL2_PIN 4
+    kconfig-tweak --file "$nuttx_config" --set-val CONFIG_ESP32S3_LEDC_CHANNEL3_PIN 5
+    # The current board driver exposes QVGA RGB565.  Keep the generic
+    # ai_agent JPEG camera tool disabled until an encoder or JPEG sensor mode
+    # is added; enabling it would label raw RGB565 as JPEG.
+    kconfig-tweak --file "$nuttx_config" --disable CONFIG_AI_AGENT_CAMERA
+    (cd "$OPENVELA_ROOT/nuttx" && make olddefconfig > /dev/null 2>&1) || true
+    info "Configured ESP32-S3-EYE camera, I2S0 RX microphone, and raw-frame probe path"
+}
+
 disable_mbedtls_tls13() {
     local mbedtls_config="$OPENVELA_ROOT/apps/crypto/mbedtls/include/mbedtls/mbedtls_config.h"
     require_file "$mbedtls_config"
@@ -208,6 +300,7 @@ disable_mbedtls_tls13() {
 build_firmware() {
     deploy_sources
     apply_network_capacity_config
+    apply_media_config
     disable_mbedtls_tls13
     export CCACHE_DISABLE=1
     export CROSSDEV="xtensa-esp32s3-elf-"

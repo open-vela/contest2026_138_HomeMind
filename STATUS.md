@@ -1,15 +1,197 @@
-# HomeMind 当前状态
+﻿# HomeMind 当前状态
 
-> 整理时间：2026-09-02（当前事实截止 2026-09-02）
+> 文档更新：2026-09-07（工作包 A 版本归集与音频排障）；项目事实截止：2026-09-07。唯一当前摘要为本节；下方历史记录保留原文，其过期结论不作为当前任务。
+
+## 唯一当前摘要
+
+**部分完成：项目已有联网控制原型，严格私有化与离线感知仍是剩余开发任务。修改文档不代表原方案已兑现。** 当前主线为 ESP32-S3-EYE + OpenVela/ai_agent 家庭感知中枢，重点是连续音频、端侧推理、家庭服务迁移与业务闭环；旧构建阻塞和米家登录问题不再是当前首要任务。
+
+| 模块 | 状态 | 已有事实与证据 | 剩余差距 |
+| --- | --- | --- | --- |
+| OpenVela 基础固件 | 部分完成 | 联网、MiMo、LED/LCD、持久化有实机记录；见[稳定性日志](logs/hardware-2026-09-01-stability-ok-full.log)及历史记录 | 最新版本统一归档、完整回归和干净构建 |
+| Skill 主动执行 | 部分完成 | 真实原文安装与延时 LED 执行[日志](logs/hardware-2026-09-02-skill-runtime.log) | 接入真实感知事件 |
+| 米家控制 | 部分完成 | MQTT→家庭网关→HA→真实灯光[验收](docs/evidence/2026-09-06_mihome_device_accept.md)；[吸顶灯直连切换记录](docs/evidence/2026-09-06_mihome_ceiling_light_swap.md) | 当前多功能房吸顶灯小程序全链路回归，开关各 10 次 |
+| 小程序 | 部分完成 | 模拟器登录、控制、[物理动作](docs/evidence/2026-09-06_miniprogram_mihome_physical.md)及[实体同步](docs/evidence/2026-09-06_mihome_entity_sync.md)有记录 | 手机真机登录、绑定、状态回读、重连、弱网和权限 |
+| 摄像头采集与公网实验 | 部分完成 | 原始帧、腾讯云转码→MiMo [现场记录](docs/evidence/2026-09-06_camera_vision_e2e.md)；视觉源码/产物已[归集](docs/evidence/2026-09-07_pcm_multibuffer_diag.md)（提交 `70a0c88`） | 正式隐私模式须关闭原始图像外发 |
+| 端侧有人/无人推理 | 未实现 | 原始取帧不等于推理 | 真实帧驱动端侧模型与存在事件 |
+| 麦克风 | 部分完成 | [有限 640 字节 PCM](docs/evidence/2026-09-03_media_pause.txt)；09-07 实机复核通过，根因已[记录](docs/evidence/2026-09-07_pcm_multibuffer_diag.md) | 多缓冲/重入队未修复（保留阻塞） |
+| 离线唤醒与本地语音命令 | 未实现 | 尚无指定词模型验收 | “你好，openvela”及一个 LED 语音命令，断公网、断 Wi-Fi 分测 |
+| 家庭语义任务编排 | 未实现 | 板端问答与工具调用已可用 | 家庭意图→必要文本 MiMo→受校验任务链路 |
+| 日程、事件、资产 | 部分完成 | 日程仅在小程序本机；后端缺对应业务模型 | 家庭 SQLite 持久化、待办到期/提醒与跨端同步 |
+| 严格私有化 | 未实现 | 当前公网视觉实验会上传原始图像 | 家庭服务迁移、外发路径关闭和出站/日志验收 |
+| 最终提交 | 部分完成 | 有报告模板、视频脚本和本地代码 | 正式材料、真实 AI 日志校验、远端合入和回执 |
+
+### 证据与版本边界
+
+- 用户本轮核查记录：网关现有测试 **9/9 通过**；这是软件测试结果，不代表重新完成硬件验收。本次文档更新未重跑硬件或网关测试。
+- **版本归集已完成（2026-09-07，Ubuntu 官方仓 `contest-final` 提交 `70a0c88`，21 文件 +2677 行）**：09-06 现场媒体/视觉/语音源码（`cmd_vision`/`cmd_set_media`/`media_capture_rgb565`、voice 录制、`vela_tls` 生命周期修复、LCD 显示线程、板级摄像头源 `esp32s3_board_camera.c`、补丁 0002/0003/0004、`apply_media_config`）已全部归集入库；`SOURCE_SNAPSHOT.json` 更新至 2026-09-07 实际哈希；`.bak` 迭代备份移出仓库至 Ubuntu `/home/hfy/work/backups-20260907/`。此前 STATUS 所述"本地命令源码未找到 cmd_vision/cmd_set_media"已解释：实现位于 Ubuntu 现场工作区未提交改动，本地副本未同步，现已归集。
+- **BIN 差异解释**：`a0029225…`（2026-09-06 现场视觉验收 BIN，ELF `8ffea523…`）与 `8cf605d9…`（2026-09-03 媒体探针版本，`clean-build-entry.log` 留有哈希）不同，因为现场在 09-06 加入视觉命令与媒体配置后重新构建并烧录；当前最新构建为 `c8a373e6…`/`473773e9…`（09-06 15:01，含视觉+语音），已随提交 `70a0c88` 同步到 `artifacts/SHA256SUMS` 并实机复核（media_probe 视频 153600 B、PCM 640 B 通过）。
+- 截至 2026-09-06 的核查，官方远端仍为模板提交 `961cf680946773cd4c1f41b29c425de892bd9a69`；本地代码、Ubuntu 现场及远端提交分开记录。本次未执行 push/PR/merge，远端状态不是本次实时查询结果。
+
+### 已确定交付边界
+
+原始音视频留在板端或家庭局域网；家庭主机承担转写、编排及 SQLite。仅必要文本允许发往 MiMo，不发送原始音视频、完整日程或资产记录。腾讯云只保留远程访问入口，目标是不持久化业务正文；远程小程序数据仍经过公网入口，不能声称全部数据不经过第三方。该部署与隐私验收尚未完成。公网视觉识别保留为历史实验，正式隐私模式关闭其外发路径。
+
+米家只交付当前多功能房吸顶灯；身份识别、手势、机器人移动/导航留在赛后，小爱音箱播报不是必交。板载麦克风为 I2S 数字麦克风。TFLM INT8 人员检测和微型关键词模型是计划路线，模型来源、许可证、资源占用及 OpenVela 适配均待验证，不能承诺无适配风险或 50ms 已实现。
+
+### 下一步与判定规则
+
+先归集版本并修复连续音频，再落实家庭服务与端侧视觉、离线语音、语义业务闭环，最后综合验收及提交。详见[冲刺计划](docs/HomeMind_比赛冲刺计划_2026-08-30_至_2026-09-20.md)、[证据索引](docs/submission/HomeMind_最终材料证据索引.md)与[后续路线](docs/HomeMind_后续路线与评估_2026-09-06.md)。
+
+状态仅用：**已验收**（限定场景有日期、证据和版本）、**部分完成**（子项有证据而目标不全）、**待验证**（已有实现或记录但证据不足）、**未实现**（目标能力尚未接入）。不使用总体完成百分比，不用局部测试勾选整个里程碑。每项完成声明必须关联测试日期、证据和源码/产物版本；缺项保留缺口。
+
+## 2026-09-07 工作包 A：版本归集与音频排障（Ubuntu 现场，已本地提交）
+
+- **版本归集完成**：Ubuntu 官方仓 `contest-final` 提交 `70a0c88`（21 文件，+2677 行），将 09-06 现场全部媒体/视觉/语音源码与产物归档：`nsh_commands.c` 新增 `cmd_vision`/`cmd_set_media`/`media_capture_rgb565` 及 voice 录制保底链路（+1304 行）、`vela_tls.c` TLS 生命周期修复（+155 行）、LCD 显示线程、板级摄像头源 `firmware/nuttx_media/esp32s3_board_camera.c`（537 行）、补丁 `0002/0003/0004`（EYE 媒体、bringup 媒体补位、I2S 音频缓冲信息）、`scripts/build.sh` 新增 `apply_media_config`（ESP32S3_CAM/VIDEO_STREAM/EXAMPLES_CAMERA/I2S0 RX 麦克风）。`artifacts/SHA256SUMS` 更新为 `c8a373e6…`/`473773e9…`，`SOURCE_SNAPSHOT.json` 更新至 2026-09-07 实际哈希；`.bak` 迭代备份移出仓库。
+- **BIN 差异解释**：`a0029225…`（09-06 现场视觉验收）≠ `8cf605d9…`（09-03 媒体探针版，`clean-build-entry.log` 留痕）≠ `c8a373e6…`（09-06 15:01 最新构建，含视觉+语音）。差异来自 09-06 现场加入视觉命令/媒体配置后的重新构建与烧录；09-03 的 `8cf605d9` 已由 `clean-build-entry.log` 佐证。
+- **PCM 排障记录**（未修复，保留阻塞）：实机复核单缓冲保底路径通过（视频 153600 B、PCM 640 B）。多缓冲/同一 APB 重入队失败的源码根因：① `esp32s3_i2s.c` `i2s_rx_worker` 的 nbytes 统计循环要求"链头描述符带 EOF"才累加，而 RX 描述符 EOF 由硬件只写回最后一个 desc，多 desc 缓冲（4095 B）统计为 0；② `audio.c` 上驱动 `head/tail` 全局记账与重新 open 后会话计数错位，poll 立即返回 `POLLIN|POLLERR`(0x9) 而数据未就绪；③ 次要嫌疑 `i2s_rx_schedule` EOF 匹配时序。修复方向与证据见 `docs/evidence/2026-09-07_pcm_multibuffer_diag.md`。
+- 未执行 push/PR/merge；远端状态不变。
+
+## 2026-09-07 工作包 B 第一步：家庭服务底座搭建与端到端验收（已验收）
+
+- **家庭 Mosquitto 已装并自启**（2.0.11，127.0.0.1:1883）：本地 pub/sub 往返验证通过；配置 /etc/mosquitto/，持久化 /var/lib/mosquitto/。
+- **家庭 FastAPI+SQLite（homemind-api）已部署并自启**（127.0.0.1:8001）：复用云端 C1 实现 backend/api/app，独立目录 /home/hfy/homemind-backend（venv + .env 0600 + systemd），数据 /home/hfy/homemind-data/homemind.db（users/device_bindings/commands/device_status）。
+- **端到端验收通过**：JWT 鉴权 → 绑定 esp32s3-eye → 下发 led.on（queued）→ 本地 MQTT 旁路收到命令 JSON → SQLite 落库。证据 [2026-09-07_home_backend_e2e.md](docs/evidence/2026-09-07_home_backend_e2e.md)（提交 c636d5\）。
+- **迁移前置备份完成**：/home/hfy/backups/2026-09-07-migration-pre/（网关 .env 0600 + 网关代码 + HA config 快照 + HA DB online backup 5MB）。
+- **第二步已完成（提交 4c2a71\）**：Mosquitto 放行 LAN 0.0.0.0:1883 + 密码认证（home-gateway/home-api，匿名拒绝验证）；API 支持 MQTT 凭据（config.py/mqtt_client.py 向后兼容）；网关双 MQTT 连接（官方仓版基线统一+播报重试，LOCAL_MQTT_* 配置，云端保留）；**板端全链路闭环验收**：API 下发 led.on → 本地 MQTT → 网关 → 串口执行 → 板子 LED 点亮 → ack done → SQLite（status=done，acked→done 49ms），TTL 过期扫描生效。
+- **第三步已完成（提交 Ò4154\）**：家庭业务接口 /v1/intents|events|tasks|assets 落地（4 表 + 4 路由，JWT 鉴权）——意图白名单拒绝（door.unlock→rejected+reason）、感知事件落库（vision/person_detected）、待办含家庭时区与提醒（pending→done+cancelled）、资产按需查询更新；SQLite 8 表，全部验收通过。
+- **工作包 B 收尾已完成（提交 \`af17d57\`）**：Mosquitto ACL 最小权限收敛（home-api 读 ack/status 写 cmd/speak，home-gateway 读 cmd/speak 写 ack/status，越权发布实测丢弃）；全服务重启恢复验证通过（命令闭环复测 queued→acked 14ms→done 50ms）；迁移核对清单落档（服务/数据 8 表/闭环/公网边界）。
+- **家庭出站通道+入口转发（relay）已落地（提交 \`eb24696\`）**：家庭侧 relay_agent 出站通道服务（systemd active）回环验收通过——模拟云端入口 POST tasks 200 落库、GET tasks 200、无 JWT 回传 401；云端 API 转发器代码入库（RELAY_MODE 条件挂载），**部署到云主机待 SSH 凭据**；业务正文只落家庭 SQLite。
+- **待办（09-08 起）**：云端侧 relay 部署与入口转发验收（待云主机凭据）；命令通道切换 relay 二期；语义理解接入（MiMo 必要文本→/v1/intents，工作包 E）；TFLM INT8 端侧视觉（工作包 C）。
+- 边界：官方仓 backend 未改（复制部署）；网关/HA/公网入口未动。
+
+
+## 历史记录（保留原文，过期结论已被后续验收替代）
+
+以下记录按当时上下文阅读：米家登录/实体同步/模拟器待办已被 09-06 后续记录替代；早期构建、联网、持久化阻塞已被后续实机记录替代。原公网视觉/ASR/音箱方案是历史实验路线，不是当前隐私模式交付要求。“最新”“下一步”“剩余边界”均仅指记录当时；如有冲突，以上方唯一当前摘要为准。
+
+
+> 整理时间：2026-09-06（当前事实截止 2026-09-06）
 > 目标：ESP32-S3-EYE 独立运行 OpenVela/ai_agent，自动联网，直接调用 MiMo，并安全执行最小本地工具。
 
-## 2026-09-02 MQTT 闭环与媒体能力核验（本地完成，未推送）
+## 2026-09-06 摄像头拍照识别端到端验收通过（用户目视比对）
+
+- **链路**：`vision` 命令 → OV2640 RGB565 帧（153600B）→ 150KB TLS 上传 → 云端 `/v1/media/frame`（Pillow 转 JPEG）→ MiMo `mimo-v2.5` 图像理解 → 中文描述回设备串口。
+- **实机两轮**：遮挡时返回"全黑画面/镜头被遮挡"；用户放置紫色 PCB 后返回"紫色的印刷电路板……丝印编号'23''C526'……安装孔……浅色平面"——颜色与物体类型完全命中（用户指认）。
+- 固件 BIN `a0029225…`（含 `vision`/`set_media` 命令与 RGB565 捕获复用函数），esptool 校验通过，网关测试后恢复 active；MEDIA_TOKEN 已写入设备 /data（不入仓库）。
+- OV2640 传感器 JPEG 模式 4 轮迭代确认不可用，识别链路为云端转码方案；证据见 `docs/evidence/2026-09-06_camera_vision_e2e.md`。**待实现**：voice（录音→MiMo ASR→问答→小爱音箱播报）。
+
+## 2026-09-06 C1 小程序闭环收口（模拟器 + 实体自动同步 + 域名登记）
+
+- **实体自动同步闭环通过（用户确认）**：微信开发者工具设备页自动显示"阳台开关"实体行（网关→云端→小程序），开/关/查状态可用；云端部署由 workbuddy 完成（5 文件 byte-identical、DB 备份、镜像重建、health/列/secret 检查全过）。至此 C1 链路：小程序登录 → 设备绑定 → 命令 queued→acked→done → LED（板载）与 mihome（阳台灯物理动作）双执行路径均闭环。
+- **微信公众平台域名已登记（用户确认）**：`hfy-ai.cloud` 已配置；手机真机预览回归待执行（真机证据仍缺）。
+- **剩余边界**：真机预览回归、演示视频、实物照片、技术报告定稿、官方仓 push/PR/merge、提交压缩包（截止 2026-09-20）。
+
+## 2026-09-06 米家实体自动同步实施（网关侧已实测；云端待 workbuddy 部署）
+
+- **动因**：用户指出设备页手填实体 ID 不合理且应显示"阳台开关"名称。已改为自动同步：网关从 HA 读取白名单实体的 friendly_name 与状态，随 status 上报；云端存库并经 `GET /v1/devices` 与 WSS 下发；小程序自动渲染实体行（名称+状态+开/关/查状态），手填降级为网关离线兜底。
+- **网关侧已实测**：`list_entities()` + `_clean_name()`（"阳台开关 开关 开关"→"阳台开关"）已部署家庭网关；实测 status 消息含 `mihome_entities=[{entity_id, name:"阳台开关", state:"on"}]`，配套 `mihome.get_state` 命令 `acked → done`。
+- **云端已部署（workbuddy，2026-09-06）**：5 个后端文件 byte-identical 覆盖、DB 备份、镜像重建、health/DB 列/secret 日志检查全过（详见用户回报与清单 2）。部署后已实测触发 `mihome.get_state` → 网关 status 快照（`name:"阳台开关", state:"off"`）→ 云端入库/WSS 链路激活。
+- **待用户**：微信开发者工具重新编译设备页，确认"米家设备控制"卡片自动显示"阳台开关（关）"实体行；点"开"应恢复灯光并显示"已开启（网关回读确认）"。
+- **验收设备更换（用户指定）**：米家白名单从阳台开关换为**多功能房吸顶灯** `light.leishi_cn_940744854_eps127_s_2_light`（雷士 eps127 主灯，不含氛围灯）；直连适配器开/关回读均确认，`_clean_name` 正确输出"多功能房吸顶灯"。`.env` 同时预置 `HOMEMIND_SPEAK_ENTITY=notify.xiaomi_cn_2085562629_lx06_play_text_a_5_1`（多功能房小爱音箱 Pro"播放文本"，为语音回复链路做准备）。网关服务重启待摄像头固件子代理完成串口测试后生效。
+- **语音回复方案确定**：设备无扬声器且 S3 无经典蓝牙；回复改走多功能房小爱音箱 Pro（HA notify.play_text）。链路：设备录音→mimo-v2.5-asr→ask 管线→回答文本 POST 云端 `/v1/media/announce`（待 workbuddy）→MQTT speak→网关→HA→音箱播报。
+- **旧副本归档**：`contest2026_138_HomeMind/` 整体移入 `_archive/contest2026_138_HomeMind_20260906/`（用户确认 official 为正式版后；移动非删除，可恢复）。`README_WORKSPACE.md` 已同步。
+- 证据见 `docs/evidence/2026-09-06_mihome_entity_sync.md`。
+
+## 2026-09-06 小程序 mihome 命令到实际灯光物理闭环确认（模拟器）
+
+- **物理闭环成立**：开发者工具模拟器下发 `mihome.set_power` → 云端 → 家庭网关 → HA → 领普阳台开关继电器 → **实际灯光**。用户现场确认：远端切 `off` 灯灭、切 `on` 灯亮，两个方向均物理动作，HA 回读与物理一致。
+- 云端 `ALLOWED_ACTIONS` 含 mihome 动作已间接确认生效（workbuddy 完成）。
+- 小程序侧新增米家控制卡片与登录 401 自愈（见下节），本轮实测通过；命令状态 `queued → acked → done` 回显正常。
+- 边界：本轮在**模拟器**完成；手机真机预览与微信公众平台服务器域名登记（request/socket `hfy-ai.cloud`）仍待执行。证据见 `docs/evidence/2026-09-06_miniprogram_mihome_physical.md`。
+
+## 2026-09-06 小程序 mihome 控制卡片与登录 401 自愈（Win11 本地，未推送）
+
+- **设备页新增"米家设备控制"卡片**：实体 ID 输入（持久化 Storage，客户端校验 `^(light|switch)\.[A-Za-z0-9_]+$`，与网关适配器白名单规则一致）+ 每设备 开/关/查状态按钮；命令为 `mihome.set_power`（`params:{entity_id,on}`）与 `mihome.get_state`，复用 queued→acked→done/expired 轮询与 WSS 回显链路。因网关只在实体状态回读确认后才发 `done`，UI 显示"已开启/已关闭（网关回读确认）"；`mihome_result` 明细暂不回传小程序（云端 status 事件未透传，属后续增强）。
+- **模拟器不走登录的根因与修复**：`utils/api.js` 的 `login()` 在 Storage 缓存旧 `accessToken` 时直接短路（开发者工具 Storage 跨编译保留），导致 `wx.login` 不再执行；且 401 无自愈路径。已改为：`request` 收到 401 时清除缓存 token；新增 `authRequest` 包装 401 → 强制重登一次再重试；`login(force)` 支持强制重登。设备页加载/命令/查询全部走 `authRequest`。
+- esprima JS 语法与 JSON 校验通过；改动文件：`utils/api.js`、`pages/devices/devices.js|.wxml|.wxss`。云端 `ALLOWED_ACTIONS` 扩展由 workbuddy 完成，待真机实测验证。
+
+## 2026-09-06 小程序真机准备与云端微信登录复核
+
+- **云端微信登录已配好**（公网只读验证）：`POST /v1/auth/wechat/login` 用假 code 返回 `401 wechat auth failed: invalid code`，证明后端已带有效 AppID/AppSecret 调通微信 jscode2session；`/v1/health` 正常。云端 `.env` 中 AppID 为 `wx75312eb43495775f`（用户确认）。
+- **域名结论**：`api.hfy-ai.cloud` 虽解析到同一 IP 但 TLS 证书不覆盖该子域；小程序 `app.js` 与微信后台登记均使用主域 `hfy-ai.cloud`（HTTPS/WSS 443），不需要为子域配证书。
+- **小程序侧就绪**：`project.config.json` 已填真实 AppID；API 基址 `https://hfy-ai.cloud`；设备页支持 wx.login、设备列表、`led.on/off` 命令、WSS+轮询回显与失败 toast。mihome 动作尚未接入小程序 UI（不阻塞本轮真机验收）。
+- **待云端一项**：`docker-compose.yml` 的 `ALLOWED_ACTIONS` 默认值不含 mihome 动作，需 workbuddy 在云端 `.env` 加上并重建 api 容器（详见 [2026-09-06_腾讯云workbuddy操作清单.md](docs/2026-09-06_腾讯云workbuddy操作清单.md)）。
+- **待用户**：微信公众平台（mp.weixin.qq.com）→ 开发设置 → 服务器域名：request 域名加 `https://hfy-ai.cloud`，socket 域名加 `wss://hfy-ai.cloud`；之后微信开发者工具真机预览验收登录/绑定/命令/失败回显。
+
+## 2026-09-06 真实米家设备开关闭环验收通过（本地完成，未推送）
+
+- **设备**：公望府 阳台"阳台开关"（`linp_cn_950233435_t2dbw1`，实体 `switch.linp_cn_950233435_t2dbw1_on_p_2_1`），白名单仅此一个实体。链路：MQTT TLS → 家庭网关 → `mihome_adapter.py` → Home Assistant REST → Xiaomi Home 集成 → 真实设备。
+- **实机结果**：MQTT 全链路 `mihome.set_power on/off` 均 `acked → done` 且 `mihome_result` 回读确认；`mihome.get_state` 返回真实状态；重复 on/off/on/off 4/4 通过；结束时设备恢复 `off`。直连适配器 on/off 同样通过。
+- **缺陷修复**：`set_power` 状态回读存在 HA 秒级滞后，已在适配器加入 3 秒确认窗口轮询（超时仍失败，保持 fail-closed），新增单元测试后 4 项测试通过并重新部署重启（服务 active，串口/MQTT 正常）。
+- **安全**：HA 长期访问令牌只存于服务器 `.env`（0600），未进入仓库、日志或本文件；白名单外实体默认拒绝。
+- 证据见 `docs/evidence/2026-09-06_mihome_device_accept.md` 与 `docs/evidence/2026-09-06_mihome_gateway_deploy.md`。本轮 gateway-agent/mihome 改动、证据与 STATUS 同步已在 Ubuntu 官方仓 `contest-final` 分支完成一次本地提交（2026-09-06，未推送远程）；此前各轮（09-01～09-03 固件/媒体/Skill 等）在仓中仍为未提交工作区改动。
+- **下一执行队列**：① 小程序真机 `wx.login`/绑定/命令状态与失败回显（微信侧外部门禁）；② 连续音频与离线唤醒边界收口；③ 最终固件全项回归；④ 视频、照片、报告与官方提交材料。
+
+## 2026-09-06 MiHome 网关部署（等待 token 与白名单）
+
+- 家庭 Ubuntu 上 Home Assistant（Docker stable）运行正常，米家集成已导入真实设备（实体注册表中 `xiaomi_home` 实体 1835 个，`light.*` 51 个、`switch.*` 362 个），与用户确认的米家登录解除一致。
+- `backend/gateway-agent/` 的 `gateway_agent.py`（含 mihome 分支）、`mihome_adapter.py`、`command_policy.py` 已部署至 `/home/hfy/homemind-gateway/`（备份保留），部署哈希与仓库一致，服务重启后 active、串口与 MQTT 正常；本地 3 项适配器单元测试通过。
+- `.env` 已加 `HOMEMIND_HA_URL`；`HOMEMIND_HA_TOKEN` 与 `HOMEMIND_MIHOME_ALLOWED_ENTITIES` 仍为空，适配器 fail-closed。**真实米家设备 `mihome.set_power`/`mihome.get_state` 开关与状态回读尚未执行**；待用户提供 HA 长期访问令牌并选定一台允许开关的设备后，经 MQTT→网关→HA→设备→回读→`acked→done` 验收。详见 `docs/evidence/2026-09-06_mihome_gateway_deploy.md`。
+- （后记：token 与白名单已于同日配置完成，验收结果见上一节。）
+
+## 2026-09-06 米家登录阻塞解除（用户确认）
+
+- 用户确认 Home Assistant 中的米家登录问题已经解决；本记录不推断具体修复方法，也不把历史 OAuth/DNS 排错步骤视为当前操作要求。
+- 当前仍未把“登录成功”写成真实设备闭环：米家设备导入、单台 Wi-Fi 灯/插座开关、状态回读、HomeMind 网关动作和微信小程序真机联动均需单独取得证据。
+- 下一步按比赛主线执行：先完成一台真实米家设备的 `mihome.set_power`/`mihome.get_state` 验收，再做小程序真机登录、绑定、命令状态与失败回显；随后继续连续音频/离线唤醒、最终回归和提交材料。
+- 后续路线与家庭主机、HomePod、ROS 2/Microduck、云端维护及 CloudBase 影响见 [`docs/HomeMind_后续路线与评估_2026-09-06.md`](docs/HomeMind_后续路线与评估_2026-09-06.md)。
+
+## 2026-09-03 媒体实机验收（未推送）
+
+- 本轮未执行远程 Git push；已在 Ubuntu 干净工作区完成部署、构建、取回产物并烧录到 ESP32-S3-EYE。最新 BIN/ELF 的 SHA-256 已同步到 `artifacts/SHA256SUMS`：`8cf605d958ddf99731c47ae170572f8da581516a2ad3b7572f6f1efe66aa0172` / `a59d163c13a75cf6749a204788154b7bab8cc3d21f95ba80c7bbf00abb0cdf40`，烧录输出为 `Hash of data verified`。
+- 摄像头连续两次实机探测均得到真实 OV2640 QVGA RGB565 帧：`MEDIA_VIDEO_FRAME bytes=153600`；这证明 `/dev/video0`、LCD_CAM/V4L2、OV2640 时钟/引脚和 DMA 捕获路径可用，但不等于端侧人脸/人员推理已经完成。
+- 麦克风连续两次实机探测均完成 `/dev/audio/pcm_in0` 配置、`AUDIOIOC_GETBUFFERINFO`、缓冲区分配/入队/启动，并得到 `MEDIA_AUDIO_PCM bytes=640`。当前探针使用一个有限的 640 字节、4 字节对齐 PCM 缓冲，证明 I2S0 RX DMA 能返回真实 PCM 数据；尚未证明长时间连续流、语音识别或唤醒词效果。
+- 多缓冲试验以及同一 APB 重入队试验均出现首个缓冲完成、后续缓冲未完成的驱动/上半层生命周期问题，因此本轮只将“单缓冲有限采样”记为已验收；没有把多缓冲稳定流式采集写成完成。I2S0 为 master，GPIO 为 BCLK/WS/DIN=41/42/2，与 ESP32-S3-EYE 板级资料一致。
+- 离线唤醒关键词模型/运行时仍未接入；不能宣称“你好，openvela”或“Hello, openvela”离线唤醒完成。米家登录阻塞已由用户于 2026-09-06 确认解除，但真实米家设备控制闭环仍未完成；公网 HTTPS、OpenAPI 和 WSS 鉴权入口已可达，但真实微信登录、认证 WSS 消息和小程序真机仍受 AppID/账号/云端业务配置等外部门禁影响。
+- 证据详见 `docs/evidence/2026-09-03_media_pause.txt`。后续优先级为：连续音频/驱动收口或明确限制、离线 KWS 模型路线、真实米家设备、公共服务部署与小程序真机、最终报告/视频/照片；仍不推送远程。
+
+## 2026-09-03 官方 GitHub README 与提交要求复核
+
+- 官方仓 `https://github.com/open-vela/contest2026_138_HomeMind` 当前网页仍显示
+  `dev-ai-contest-2026` 模板分支（3 个模板提交）；本地 `contest-final` 的 HomeMind
+  改动尚未 push，所以不能以 GitHub 当前页面判断本地成果是否存在。
+- 官方 README 第六节要求最终 README 至少说明：作品简介、选题方向、目录结构、
+  完整运行方式和 AI Coding 使用说明，并指向 `logs/` 中的完整日志。
+- 官方大赛说明要求另提交作品介绍文档（`.docx` / `.pdf` / `.pptx`）、不超过 5 分钟的
+  `mp4`/`mov` 等视频和专属仓地址；代码按 fork → commit/push → PR → 自行 review 合入，
+  `nuttx` 等公共仓改动另走对应公共仓 PR。最终提交前仍需补齐技术报告、视频、实物照片、
+  日志真实 GitHub 登录名校验和远端合并状态。
+
+## 2026-09-02/03 公网 API/WSS 只读复核
+
+- 2026-09-02 的历史探测曾被 DNSPod webblock 拦截；2026-09-03 备案/服务商门禁
+  已变化，`hfy-ai.cloud` 的 HTTP 80 正常 301 到 HTTPS，HTTPS 证书校验和
+  `GET /v1/health` 均成功，返回 `{"status":"ok","service":"homemind-c1"}`。
+- 公网 `GET /openapi.json` 返回 200，未授权 `GET /v1/devices` 返回 401，空码微信
+  登录返回 400；带无效 token 的 WebSocket Upgrade 到 `/v1/ws/app` 返回 403。
+  这些结果证明 Nginx/FastAPI/WSS 鉴权入口已可达，不等于真实微信 token、WSS 消息
+  推送和小程序真机闭环已经通过。
+- 真实微信 `wx.login` code、开发者工具清洁编译、设备绑定、命令状态和失败回显仍需
+  在微信侧完成；家庭 Ubuntu 无需开放公网入站端口。证据见
+  `docs/evidence/2026-09-02_public_endpoint_probe.txt`，未执行远程 push。
+
+## 2026-09-02 MQTT 闭环与小程序改动（本地完成，未推送）
 
 - **MQTT 真实段落闭环**：Ubuntu 家庭网关已部署本地 `gateway_agent.py` 与 `command_policy.py`，并完成真实 broker → 网关 → `/dev/ttyACM0` → `ai_agent` → 板载 LED → MQTT 的双向测试；`led.on`、`led.off` 各收到 `acked → done`，对应状态分别为 `on/off`，单次约 201 ms。证据见 `docs/evidence/2026-09-02_mqtt_gateway_loop.txt`。
 - **安全门禁**：命令 ID、动作白名单、时间戳、TTL、QoS1 重放抑制已加入网关；只有串口输出确认目标 LED JSON 状态才发 `done`，失败发 `expired`，不再乐观更新 LED 状态。网关服务当前 active，未执行 Git push。
-- **小程序/后端本地改动**：设备解绑已改为真实 `DELETE /v1/devices/{device_id}`；设备命令只在最终 `done/expired` 解除防重入，并增加 WSS 丢失时的命令状态轮询。Windows 已完成 Python 语法、Node JS 语法和 JSON 解析检查；云端 API 尚未部署这批改动，微信开发者工具/真机仍未验收。
-- **摄像头与麦克风负证据**：板端探测没有 `/dev/video0`、`/dev/audio` 或 `/dev/i2s*`，`/dev` 仅有显示、GPIO、串口和基础节点；现有 camera tool 默认 `CONFIG_AI_AGENT_CAMERA=n`，语音源码没有离线唤醒模型/关键词检测。证据见 `docs/evidence/2026-09-02_media_probe.txt`，摄像头和“你好，openvela”离线唤醒不能标记完成。
+- **小程序/后端本地改动**：设备解绑已改为真实 `DELETE /v1/devices/{device_id}`；设备命令只在最终 `done/expired` 解除防重入，并增加 WSS 丢失时的命令状态轮询。Windows 已完成 Python 语法、esprima JS 语法和 JSON 解析检查；公网入口只读门禁已通过，微信开发者工具/真机和认证业务流仍未验收。
 - **仍未完成**：真实米家设备桥接、FastAPI 数据库/WSS/小程序真机闭环、真实 AppID 清洁编译与预览、最终视频/实物照片/官方 DOCX-PDF/提交包、官方仓远程 push/PR merge。
+
+## 2026-09-02 媒体驱动适配续接（源码已落库，当前边界见上方 2026-09-03 记录）
+
+- 已按 ESP32-S3-EYE 的实际引脚加入 OV2640 DVP 板级适配：LCD_CAM DMA/V4L2
+  注册、OV2640 I2C0 配置、GPIO15 LEDC XCLK，以及 I2S0 RX 麦克风注册；部署
+  补丁为 `firmware/patches/0002-homemind-esp32s3-eye-media.patch`，板级源文件
+  为 `firmware/nuttx_media/esp32s3_board_camera.c`。
+- 已把配置写入 `scripts/build.sh`：I2C0 SDA/SCL=4/5，I2S0 BCLK/WS/DIN=41/42/2，
+  16 kHz/16 bit RX，LEDC channel 0 XCLK=GPIO15。此处没有打开通用 JPEG camera
+  tool，因为当前板级驱动描述的是 QVGA RGB565；在没有编码或传感器 JPEG 模式
+  证据前直接送 Vision LLM 会把原始帧误标为 JPEG。
+- 本段原始 staging 记录当时尚未完成干净 Ubuntu 构建；随后媒体固件已在真机得到
+  一帧 320x240 RGB565 图像。旧的 `/dev/video0`、`/dev/audio`、`/dev/i2s*` 负探测
+  只代表旧固件。详细边界见 `docs/evidence/2026-09-02_media_driver_staging.md`。
+- 未执行远程 push；MiMo key、Wi-Fi 密码和 SSH 密码不写入仓库。
 
 ## 2026-09-02 Skill runtime completion（本地完成，未推送）
 

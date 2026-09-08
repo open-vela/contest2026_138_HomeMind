@@ -60,16 +60,22 @@
 #include <malloc.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+
+#include <nuttx/audio/audio.h>
+#include <nuttx/video/video.h>
 
 #ifdef CONFIG_BOARDCTL_RESET
 #include <sys/boardctl.h>
@@ -145,6 +151,7 @@ static void cmd_help(void)
         "  voice_stop             - Stop voice channel\n"
         "  voice_test_tts <text> [out.pcm] - Test TTS synthesis\n"
         "  voice_test_asr <file>  - Test ASR recognition\n"
+        "  media_probe          - Probe OV2640 RGB565 frame and I2S microphone\n"
         "  set_voice_tts <name>   - Switch TTS backend\n"
         "  set_voice_asr <name>   - Switch ASR backend\n"
         "  set_weixin_token <tok> - Set WeChat bot token\n"
@@ -189,6 +196,317 @@ static void cmd_help(void)
 }
 
 /* ── Command implementations ──────────────────────────────────── */
+
+static unsigned long media_checksum(const unsigned char* data, size_t len)
+{
+    unsigned long checksum = 2166136261UL;
+    size_t i;
+
+    for (i = 0; i < len; i++) {
+        checksum ^= data[i];
+        checksum *= 16777619UL;
+    }
+
+    return checksum;
+}
+
+static void cmd_media_probe(void)
+{
+    const char* video_path = "/dev/video0";
+    const char* audio_path = "/dev/audio/pcm_in0";
+    const size_t video_bytes = 320 * 240 * 2;
+    unsigned char* frames[3] = { NULL, NULL, NULL };
+    int video_fd = -1;
+    int audio_fd = -1;
+    int audio_ret;
+    int audio_started = 0;
+    int video_ret;
+    int streaming = 0;
+    struct v4l2_format fmt;
+    struct v4l2_requestbuffers req;
+    struct v4l2_buffer buf;
+    enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    struct pollfd pfd;
+    struct audio_caps_desc_s audio_caps;
+    struct audio_buf_desc_s audio_desc;
+    struct ap_buffer_info_s audio_info;
+    struct ap_buffer_s* audio_buffers[4] = { NULL, NULL, NULL, NULL };
+    unsigned int audio_count = 0;
+    unsigned int audio_index;
+    unsigned int audio_completed;
+    unsigned int audio_polls;
+    int audio_safe_to_free = 0;
+    unsigned char audio[640];
+
+    printf("MEDIA_PROBE_BEGIN video=%s audio=%s\n", video_path,
+           audio_path);
+    fflush(stdout);
+
+    video_fd = open(video_path, O_RDWR | O_NONBLOCK);
+    if (video_fd < 0) {
+        printf("MEDIA_VIDEO_FRAME_FAIL stage=open errno=%d\n", errno);
+    } else {
+        frames[0] = memalign(32, video_bytes);
+        frames[1] = memalign(32, video_bytes);
+        frames[2] = memalign(32, video_bytes);
+        if (!frames[0] || !frames[1] || !frames[2]) {
+            printf("MEDIA_VIDEO_FRAME_FAIL stage=alloc errno=%d\n", ENOMEM);
+        } else {
+            memset(&fmt, 0, sizeof(fmt));
+            fmt.type = type;
+            fmt.fmt.pix.width = 320;
+            fmt.fmt.pix.height = 240;
+            fmt.fmt.pix.field = V4L2_FIELD_ANY;
+            fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565;
+            video_ret = ioctl(video_fd, VIDIOC_S_FMT, (uintptr_t)&fmt);
+            if (video_ret < 0) {
+                printf("MEDIA_VIDEO_FRAME_FAIL stage=s_fmt errno=%d\n",
+                       errno);
+            } else {
+                memset(&req, 0, sizeof(req));
+                req.type = type;
+                req.memory = V4L2_MEMORY_USERPTR;
+                req.count = 3;
+                req.mode = V4L2_BUF_MODE_RING;
+                video_ret = ioctl(video_fd, VIDIOC_REQBUFS,
+                                  (uintptr_t)&req);
+                if (video_ret < 0) {
+                    printf("MEDIA_VIDEO_FRAME_FAIL stage=reqbufs errno=%d\n",
+                           errno);
+                } else {
+                    video_ret = 0;
+                    memset(&buf, 0, sizeof(buf));
+                    for (buf.index = 0; buf.index < 3; buf.index++) {
+                        buf.type = type;
+                        buf.memory = V4L2_MEMORY_USERPTR;
+                        buf.m.userptr = (uintptr_t)frames[buf.index];
+                        buf.length = video_bytes;
+                        video_ret = ioctl(video_fd, VIDIOC_QBUF,
+                                          (uintptr_t)&buf);
+                        if (video_ret < 0) {
+                            break;
+                        }
+                    }
+                    if (video_ret < 0) {
+                        printf("MEDIA_VIDEO_FRAME_FAIL stage=qbuf index=%u errno=%d\n",
+                               (unsigned int)buf.index, errno);
+                    } else {
+                        video_ret = ioctl(video_fd, VIDIOC_STREAMON,
+                                          (uintptr_t)&type);
+                        if (video_ret < 0) {
+                            printf("MEDIA_VIDEO_FRAME_FAIL stage=streamon errno=%d\n",
+                                   errno);
+                        } else {
+                            streaming = 1;
+                            memset(&pfd, 0, sizeof(pfd));
+                            pfd.fd = video_fd;
+                            pfd.events = POLLIN;
+                            video_ret = poll(&pfd, 1, 5000);
+                            if (video_ret <= 0) {
+                                printf("MEDIA_VIDEO_FRAME_FAIL stage=poll ret=%d revents=0x%x errno=%d\n",
+                                       video_ret, pfd.revents, errno);
+                            } else {
+                                memset(&buf, 0, sizeof(buf));
+                                buf.type = type;
+                                buf.memory = V4L2_MEMORY_USERPTR;
+                                video_ret = ioctl(video_fd, VIDIOC_DQBUF,
+                                                  (uintptr_t)&buf);
+                                if (video_ret < 0) {
+                                    printf("MEDIA_VIDEO_FRAME_FAIL stage=dqbuf errno=%d\n",
+                                           errno);
+                                } else {
+                                    printf("MEDIA_VIDEO_FRAME bytes=%u checksum=%lu sequence=%u\n",
+                                           (unsigned int)buf.bytesused,
+                                           media_checksum((const unsigned char *)
+                                                          (uintptr_t)buf.m.userptr,
+                                                          buf.bytesused < 256 ?
+                                                          buf.bytesused : 256),
+                                           (unsigned int)buf.sequence);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (streaming) {
+        ioctl(video_fd, VIDIOC_STREAMOFF, (uintptr_t)&type);
+    }
+    if (frames[0]) {
+        free(frames[0]);
+    }
+    if (frames[1]) {
+        free(frames[1]);
+    }
+    if (frames[2]) {
+        free(frames[2]);
+    }
+    if (video_fd >= 0) {
+        close(video_fd);
+    }
+
+    audio_fd = open(audio_path, O_RDWR | O_NONBLOCK);
+    if (audio_fd < 0) {
+        printf("MEDIA_AUDIO_PCM_FAIL stage=open errno=%d\n", errno);
+    } else {
+        memset(&audio_caps, 0, sizeof(audio_caps));
+        audio_caps.caps.ac_len = sizeof(struct audio_caps_s);
+        audio_caps.caps.ac_type = AUDIO_TYPE_INPUT;
+        audio_caps.caps.ac_controls.w = 16000;
+        audio_caps.caps.ac_controls.b[2] = 16;
+        audio_caps.caps.ac_channels = 1;
+        audio_caps.caps.ac_format.hw = AUDIO_FMT_PCM;
+        printf("MEDIA_AUDIO_STAGE config\n");
+        fflush(stdout);
+        audio_ret = ioctl(audio_fd, AUDIOIOC_CONFIGURE,
+                          (uintptr_t)&audio_caps);
+        if (audio_ret < 0) {
+            printf("MEDIA_AUDIO_PCM_FAIL stage=config ret=%d errno=%d\n",
+                   audio_ret, errno);
+        } else {
+            memset(&audio_info, 0, sizeof(audio_info));
+            audio_ret = ioctl(audio_fd, AUDIOIOC_GETBUFFERINFO,
+                              (uintptr_t)&audio_info);
+            printf("MEDIA_AUDIO_STAGE info nbuffers=%u buffer=%u ret=%d\n",
+                   (unsigned int)audio_info.nbuffers,
+                   (unsigned int)audio_info.buffer_size, audio_ret);
+            fflush(stdout);
+            if (audio_ret < 0) {
+                printf("MEDIA_AUDIO_PCM_FAIL stage=info ret=%d errno=%d\n",
+                       audio_ret, errno);
+            } else {
+                audio_count = audio_info.nbuffers;
+                /* This command is a finite capture probe, not a streaming
+                 * consumer.  Keep one short, 4-byte-aligned DMA transfer so
+                 * the stock I2S lower half can drain and release it cleanly
+                 * before the next probe. */
+                if (audio_count > 1) {
+                    audio_count = 1;
+                }
+                printf("MEDIA_AUDIO_STAGE alloc count=%u\n", audio_count);
+                fflush(stdout);
+                audio_ret = 0;
+                for (audio_index = 0; audio_index < audio_count;
+                     audio_index++) {
+                    memset(&audio_desc, 0, sizeof(audio_desc));
+                    audio_desc.numbytes = sizeof(audio);
+                    audio_desc.u.pbuffer = &audio_buffers[audio_index];
+                    audio_ret = ioctl(audio_fd, AUDIOIOC_ALLOCBUFFER,
+                                      (uintptr_t)&audio_desc);
+                    if (audio_ret != sizeof(audio_desc) ||
+                        !audio_buffers[audio_index]) {
+                        printf("MEDIA_AUDIO_PCM_FAIL stage=alloc index=%u ret=%d errno=%d\n",
+                               audio_index, audio_ret, errno);
+                        break;
+                    }
+                }
+                if (audio_index == audio_count) {
+                    printf("MEDIA_AUDIO_STAGE enqueue count=%u\n",
+                           audio_count);
+                    fflush(stdout);
+                    for (audio_index = 0; audio_index < audio_count;
+                         audio_index++) {
+                        memset(&audio_desc, 0, sizeof(audio_desc));
+                        audio_desc.u.buffer = audio_buffers[audio_index];
+                        audio_desc.numbytes = sizeof(audio);
+                        audio_ret = ioctl(audio_fd, AUDIOIOC_ENQUEUEBUFFER,
+                                          (uintptr_t)&audio_desc);
+                        if (audio_ret < 0) {
+                            printf("MEDIA_AUDIO_PCM_FAIL stage=enqueue index=%u ret=%d errno=%d\n",
+                                   audio_index, audio_ret, errno);
+                            break;
+                        }
+                    }
+                }
+                if (audio_index == audio_count) {
+                    printf("MEDIA_AUDIO_STAGE start\n");
+                    fflush(stdout);
+                    audio_ret = ioctl(audio_fd, AUDIOIOC_START, 0);
+                    if (audio_ret < 0) {
+                        printf("MEDIA_AUDIO_PCM_FAIL stage=start ret=%d errno=%d\n",
+                               audio_ret, errno);
+                    } else {
+                        audio_started = 1;
+                        printf("MEDIA_AUDIO_STAGE poll\n");
+                        fflush(stdout);
+                        audio_completed = 0;
+                        audio_polls = 0;
+                        memset(&pfd, 0, sizeof(pfd));
+                        pfd.fd = audio_fd;
+                        pfd.events = POLLIN;
+                        while (audio_completed < audio_count &&
+                               audio_polls++ < 8) {
+                            audio_completed = 0;
+                            for (audio_index = 0; audio_index < audio_count;
+                                 audio_index++) {
+                                if (audio_buffers[audio_index] &&
+                                    audio_buffers[audio_index]->nbytes > 0) {
+                                    audio_completed++;
+                                }
+                            }
+                            if (audio_completed == audio_count) {
+                                break;
+                            }
+                            video_ret = poll(&pfd, 1, 1000);
+                            if (video_ret <= 0) {
+                                break;
+                            }
+                        }
+                        if (audio_completed < audio_count) {
+                            printf("MEDIA_AUDIO_PCM_FAIL stage=drain completed=%u/%u ret=%d revents=0x%x errno=%d\n",
+                                   audio_completed, audio_count, video_ret,
+                                   pfd.revents, errno);
+                        } else {
+                            audio_safe_to_free = 1;
+                            audio_ret = 0;
+                            for (audio_index = 0; audio_index < audio_count;
+                                 audio_index++) {
+                                if (audio_buffers[audio_index] &&
+                                    audio_buffers[audio_index]->nbytes > 0) {
+                                    audio_ret = audio_buffers[audio_index]->nbytes;
+                                    memcpy(audio,
+                                           audio_buffers[audio_index]->samp,
+                                           audio_ret < (int)sizeof(audio) ?
+                                           (size_t)audio_ret : sizeof(audio));
+                                    break;
+                                }
+                            }
+                            if (audio_ret == 0) {
+                                printf("MEDIA_AUDIO_PCM_FAIL stage=buffer_empty revents=0x%x errno=%d\n",
+                                       pfd.revents, errno);
+                            } else {
+                                printf("MEDIA_AUDIO_PCM bytes=%d buffer=%u checksum=%lu\n",
+                                       audio_ret, audio_index,
+                                       media_checksum(audio, audio_ret < 256 ?
+                                                      (size_t)audio_ret : 256));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (audio_started) {
+            ioctl(audio_fd, AUDIOIOC_STOP, 0);
+        }
+        if (audio_safe_to_free) {
+            for (audio_index = 0; audio_index < audio_count; audio_index++) {
+                if (!audio_buffers[audio_index]) {
+                    continue;
+                }
+                memset(&audio_desc, 0, sizeof(audio_desc));
+                audio_desc.u.buffer = audio_buffers[audio_index];
+                ioctl(audio_fd, AUDIOIOC_FREEBUFFER,
+                      (uintptr_t)&audio_desc);
+            }
+        }
+        close(audio_fd);
+    }
+
+    printf("MEDIA_PROBE_DONE\n");
+    fflush(stdout);
+}
 
 static void cmd_net_test(int argc, char** argv)
 {
@@ -1428,6 +1746,8 @@ static void* cli_thread(void* arg)
             cmd_voice_test_tts(argc, argv);
         else if (strcmp(cmd, "voice_test_asr") == 0)
             cmd_voice_test_asr(argc, argv);
+        else if (strcmp(cmd, "media_probe") == 0)
+            cmd_media_probe();
         else if (strcmp(cmd, "set_voice_tts") == 0)
             cmd_set_voice_tts(argc, argv);
         else if (strcmp(cmd, "set_voice_asr") == 0)
