@@ -63,7 +63,19 @@
 >
 > 补录口径：只导出 `cwd=C:\Users\a2760\Desktop\HomeMind` 的会话；`Desktop\新疆`、`Desktop\AI`、`Documents\Codex\...` 等无关项目的会话一律不导出。脱敏沿用官方 `DEFAULT_REDACT_RULES`（`sk-*`／`ghp_*`／`Bearer`）并追加 Ubuntu SSH 密码规则，共 474 处替换，逐事件记录 `redacted_count`。
 >
-> **仍存在的缺口**：09-01 起的 WorkBuddy/MiMo 会话不在官方支持的 4 种工具内，无法计入；OpenCode 本地库（`~/.local/share/opencode/opencode.db`）会话数为 0，无可补数据；Ubuntu `--backfill` 导入 0。后续计入比赛的开发须在 Ubuntu openvela 工作区内进行。
+> **仍存在的缺口**：
+>
+> 1. **官方 Codex 采集器当前采集为 0 事件**（实测复现与源码级根因见
+>    [2026-09-10_codex_collector_zero_events.md](../evidence/2026-09-10_codex_collector_zero_events.md)）。
+>    `expand_claude_event()` 按 Claude Code transcript 结构取值，而当前 Codex rollout 的对话体在
+>    `payload` 里、顶层 `type` 为 `response_item`，导致每个事件都被丢弃。后果：**在 Ubuntu 工作区内
+>    用 Codex 开发也不会自动入仓**，2026-09 日志只能手工补录。属官方工具 bug（手册 FAQ Q6），未改
+>    `.claude/` 工具仓。
+> 2. 09-01 起的 WorkBuddy/MiMo 会话不在官方支持的 4 种工具内，无法计入；
+> 3. OpenCode 本地库（`~/.local/share/opencode/opencode.db`）`session`／`message`／`part` 表均为 0 行，无可补数据；
+> 4. Ubuntu `contest-snapshot --backfill` 只扫 Claude Code transcript，导入 0。
+>
+> 后续若要自动采集，应改用 Claude Code 在 Ubuntu openvela 工作区内开发。
 
 - [x] 在正式 openvela 工作区、专属仓目录中安装官方日志采集器：
 
