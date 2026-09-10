@@ -617,6 +617,33 @@ static bool read_led(void)
 
 /* ── display thread ───────────────────────────────────────────── */
 
+/* Post-mortem stage readout (DIAGNOSTIC ONLY).
+ * The ST7789 panel keeps showing its last frame after the chip hangs, so
+ * whatever stage number is on screen when it freezes is the last step
+ * reached.  Big white digits on a red plate, top-left.
+ */
+
+void hm_lcd_mark(int stage)
+{
+    struct fb_area_s area;
+    char buf[8];
+
+    if (g_lcd.fb == NULL || g_lcd.fd < 0)
+      {
+        return;
+      }
+
+    snprintf(buf, sizeof(buf), "%d", stage);
+    fill_rect(0, 0, 64, 44, 0xF800u);
+    draw_latin(buf, 4, 4, 0xFFFFu, 5);
+
+    area.x = 0;
+    area.y = 0;
+    area.w = 64;
+    area.h = 44;
+    ioctl(g_lcd.fd, FBIO_UPDATE, (unsigned long)((uintptr_t)&area));
+}
+
 static void *display_thread(void *arg)
 {
     (void)arg;

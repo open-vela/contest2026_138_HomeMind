@@ -1,32 +1,37 @@
 ﻿# HomeMind 当前状态
 
-> 文档更新：2026-09-07（工作包 A 版本归集与音频排障）；项目事实截止：2026-09-07。唯一当前摘要为本节；下方历史记录保留原文，其过期结论不作为当前任务。
+> 文档更新：2026-09-09（摄像头/网络探针与家庭服务状态收口）；项目事实截止：2026-09-09。唯一当前摘要为本节；下方历史记录保留原文，其过期结论不作为当前任务。
 
 ## 唯一当前摘要
 
-**部分完成：项目已有联网控制原型，严格私有化与离线感知仍是剩余开发任务。修改文档不代表原方案已兑现。** 当前主线为 ESP32-S3-EYE + OpenVela/ai_agent 家庭感知中枢，重点是连续音频、端侧推理、家庭服务迁移与业务闭环；旧构建阻塞和米家登录问题不再是当前首要任务。
+**部分完成：截至 2026-09-09，项目已有联网控制原型和家庭侧 API、SQLite、MQTT、网关、relay 闭环；严格私有化、端侧人员检测、离线感知以及小程序真机/跨端验收仍未完成。修改文档不代表原方案已兑现。** 当前主线为 ESP32-S3-EYE + OpenVela/ai_agent 家庭感知中枢，重点是摄像头访问冻结定位、连续音频、端侧推理、云端入口收口与业务闭环；模型初始化资源清理与越界调试读取已通过单文件交叉编译，并已纳入一次完整构建/烧录，端侧推理仍未验收。
+
+**交接暂停点（2026-09-09）**：正式 `scripts/build.sh build`/刷写产物 BIN `d2ef3ee7…`、ELF `8b87542f…` 已记录；`media_probe` 仍在 `capture_open()` 的 `cmng->mutex` 等待处失去串口/网络响应。有界锁临时实验已回退，默认源码仍为阻塞锁并保留阶段标记。服务已恢复 active，稳定串口为 `/dev/homemind-esp32`。WORKBUDDY 接手前请先读[摄像头交接记录](docs/evidence/2026-09-09_camera_handoff.md)和[最新探针证据](docs/evidence/2026-09-09_camera_network_probe.md)。
 
 | 模块 | 状态 | 已有事实与证据 | 剩余差距 |
 | --- | --- | --- | --- |
 | OpenVela 基础固件 | 部分完成 | 联网、MiMo、LED/LCD、持久化有实机记录；见[稳定性日志](logs/hardware-2026-09-01-stability-ok-full.log)及历史记录 | 最新版本统一归档、完整回归和干净构建 |
 | Skill 主动执行 | 部分完成 | 真实原文安装与延时 LED 执行[日志](logs/hardware-2026-09-02-skill-runtime.log) | 接入真实感知事件 |
 | 米家控制 | 部分完成 | MQTT→家庭网关→HA→真实灯光[验收](docs/evidence/2026-09-06_mihome_device_accept.md)；[吸顶灯直连切换记录](docs/evidence/2026-09-06_mihome_ceiling_light_swap.md) | 当前多功能房吸顶灯小程序全链路回归，开关各 10 次 |
-| 小程序 | 部分完成 | 模拟器登录、控制、[物理动作](docs/evidence/2026-09-06_miniprogram_mihome_physical.md)及[实体同步](docs/evidence/2026-09-06_mihome_entity_sync.md)有记录 | 手机真机登录、绑定、状态回读、重连、弱网和权限 |
-| 摄像头采集与公网实验 | 部分完成 | 原始帧、腾讯云转码→MiMo [现场记录](docs/evidence/2026-09-06_camera_vision_e2e.md)；视觉源码/产物已[归集](docs/evidence/2026-09-07_pcm_multibuffer_diag.md)（提交 `70a0c88`） | 正式隐私模式须关闭原始图像外发 |
-| 端侧有人/无人推理 | 未实现 | 原始取帧不等于推理 | 真实帧驱动端侧模型与存在事件 |
+| 小程序 | 部分完成 | 模拟器登录、控制、[物理动作](docs/evidence/2026-09-06_miniprogram_mihome_physical.md)及[实体同步](docs/evidence/2026-09-06_mihome_entity_sync.md)有记录；[09-08 真机验收记录](docs/evidence/2026-09-08_miniprogram_device_accept.md)仍是未执行模板，云端 health/WSS/TLS 只读基线通过 | 手机真机登录、绑定、状态回读、重连、弱网、权限及小程序跨端日程/资产同步 |
+| 摄像头采集与公网实验 | 部分完成 | 原始帧、腾讯云转码→MiMo [现场记录](docs/evidence/2026-09-06_camera_vision_e2e.md)；视觉源码/产物已归集；Ubuntu 官方仓 `firmware/ai_agent_overlay/src/vision/person_detect.cc` 在 HEAD `aaefdcb` 被跟踪；[09-09 摄像头/网络探针](docs/evidence/2026-09-09_camera_network_probe.md)记录正式 BIN `d2ef3ee7…`、API/gateway/relay active、API health ok 及板端网络/串口现象 | 正式隐私模式须关闭原始图像外发；摄像头访问冻结仍需定位并修复 |
+| 端侧有人/无人推理 | 未实现 | 09-09 细粒度探针在 `capture_open()` 输出 `[CAM-OPEN] mutex_enter` 后等待管理锁，随后网络/串口无响应；原始取帧不等于推理，初始化修复已随诊断 BIN 烧录但未执行 TFLM 推理 | 先定位 capture manager 锁持有者并修复 open/close 生命周期，再用真实帧驱动端侧模型与存在事件 |
 | 麦克风 | 部分完成 | [有限 640 字节 PCM](docs/evidence/2026-09-03_media_pause.txt)；09-07 实机复核通过，根因已[记录](docs/evidence/2026-09-07_pcm_multibuffer_diag.md) | 多缓冲/重入队未修复（保留阻塞） |
 | 离线唤醒与本地语音命令 | 未实现 | 尚无指定词模型验收 | “你好，openvela”及一个 LED 语音命令，断公网、断 Wi-Fi 分测 |
 | 家庭语义任务编排 | 未实现 | 板端问答与工具调用已可用 | 家庭意图→必要文本 MiMo→受校验任务链路 |
-| 日程、事件、资产 | 部分完成 | 日程仅在小程序本机；后端缺对应业务模型 | 家庭 SQLite 持久化、待办到期/提醒与跨端同步 |
-| 严格私有化 | 未实现 | 当前公网视觉实验会上传原始图像 | 家庭服务迁移、外发路径关闭和出站/日志验收 |
-| 最终提交 | 部分完成 | 有报告模板、视频脚本和本地代码 | 正式材料、真实 AI 日志校验、远端合入和回执 |
+| 日程、事件、资产 | 部分完成 | 家庭 FastAPI + SQLite 已落地 `/v1/intents`、`/v1/events`、`/v1/tasks`、`/v1/assets`，意图白名单、感知事件、待办提醒/状态和资产查询已有[09-07 验收](docs/evidence/2026-09-07_home_backend_e2e.md)；小程序日程仍是本机存储 | 小程序跨端同步未验收；睡前场景、跨端/重启结果与设备结果分记仍待补证据 |
+| 严格私有化 | 未实现 | 家庭侧 API、SQLite、出站 relay 已运行；历史公网视觉实验仍会上传原始图像，云端入口切换与业务写入停用尚未完成 | 正式模式关闭原始音视频外发、云端入口/日志/数据库边界和出站验收 |
+| 最终提交 | 部分完成 | 有报告模板、视频脚本和本地代码；09-09 已有记录显示 fork 推送 `7abeec5`、PR #1 已开（该记录不是本轮远端实时查询） | CLA/Actions 检查与官方主分支合入、正式材料、真实 AI 日志校验、视频/照片和回执 |
 
 ### 证据与版本边界
 
-- 用户本轮核查记录：网关现有测试 **9/9 通过**；这是软件测试结果，不代表重新完成硬件验收。本次文档更新未重跑硬件或网关测试。
+- [09-09 摄像头/网络探针](docs/evidence/2026-09-09_camera_network_probe.md)：Ubuntu API、gateway、relay 均 active，API health ok；正式流程复测在稳定别名对应的 ACM0 上看到 `MEDIA_PROBE_BEGIN`、`open_enter`、`[CAM-OPEN] mutex_enter`，未见 `mutex_locked`，随后 heap/网络无响应；网关已恢复 active。该证据把卡点定位到 capture manager 的锁等待，但仍未证明锁持有者或整机硬锁死。交接细节见[摄像头交接记录](docs/evidence/2026-09-09_camera_handoff.md)。
+- 串口重枚举已收口：Ubuntu udev 规则增加 `/dev/homemind-esp32` 别名，`homemind-gateway` 当前通过该稳定路径打开 ACM1；服务仍为 `active`。
+- 用户本轮核查记录：网关现有测试 **9/9 通过**；这是软件测试结果，不代表重新完成硬件验收。本次文档更新未重跑网关 9/9 测试。
 - **版本归集已完成（2026-09-07，Ubuntu 官方仓 `contest-final` 提交 `70a0c88`，21 文件 +2677 行）**：09-06 现场媒体/视觉/语音源码（`cmd_vision`/`cmd_set_media`/`media_capture_rgb565`、voice 录制、`vela_tls` 生命周期修复、LCD 显示线程、板级摄像头源 `esp32s3_board_camera.c`、补丁 0002/0003/0004、`apply_media_config`）已全部归集入库；`SOURCE_SNAPSHOT.json` 更新至 2026-09-07 实际哈希；`.bak` 迭代备份移出仓库至 Ubuntu `/home/hfy/work/backups-20260907/`。此前 STATUS 所述"本地命令源码未找到 cmd_vision/cmd_set_media"已解释：实现位于 Ubuntu 现场工作区未提交改动，本地副本未同步，现已归集。
-- **BIN 差异解释**：`a0029225…`（2026-09-06 现场视觉验收 BIN，ELF `8ffea523…`）与 `8cf605d9…`（2026-09-03 媒体探针版本，`clean-build-entry.log` 留有哈希）不同，因为现场在 09-06 加入视觉命令与媒体配置后重新构建并烧录；当前最新构建为 `c8a373e6…`/`473773e9…`（09-06 15:01，含视觉+语音），已随提交 `70a0c88` 同步到 `artifacts/SHA256SUMS` 并实机复核（media_probe 视频 153600 B、PCM 640 B 通过）。
-- 截至 2026-09-06 的核查，官方远端仍为模板提交 `961cf680946773cd4c1f41b29c425de892bd9a69`；本地代码、Ubuntu 现场及远端提交分开记录。本次未执行 push/PR/merge，远端状态不是本次实时查询结果。
+- **BIN 差异解释**：`a0029225…`（2026-09-06 现场视觉验收 BIN，ELF `8ffea523…`）与 `8cf605d9…`（2026-09-03 媒体探针版本，`clean-build-entry.log` 留有哈希）不同，因为现场在 09-06 加入视觉命令与媒体配置后重新构建并烧录；`c8a373e6…`/`473773e9…`（09-06 15:01，含视觉+语音）仍是已归档的历史构建边界。09-08/09-09 探针使用更新构建，但尚未形成端侧人员检测通过证据。
+- **WP C 源码版本边界（2026-09-09）**：本轮开始时 Ubuntu 官方仓为 clean worktree，HEAD 为 `aaefdcb`；`firmware/ai_agent_overlay/src/vision/person_detect.cc` 已被 Git 跟踪。本轮当前已有未提交的[模型初始化修复](docs/evidence/2026-09-09_vision_init_lifecycle.md)，已通过单文件交叉编译并纳入诊断 BIN，esptool 校验通过，但尚未完成人员检测验收；本地 Windows checkout 落后于该 HEAD，不能据本地缺失判断源码未归仓。
+- **Git 状态（以 09-09 已有记录为准，非本轮远端实时查询）**：fork 已推送 `7abeec5`，PR #1 已开；官方默认分支仍记录为模板 `961cf680946773cd4c1f41b29c425de892bd9a69`，CLA/Actions 检查仍待处理。相关记录文件为仓外根目录 `GITHUB提交操作清单_2026-09-09.md`、`组委会求助文案_2026-09-09.md`；已知 PR URL：`https://github.com/open-vela/contest2026_138_HomeMind/pull/1`。
 
 ### 已确定交付边界
 
@@ -36,7 +41,7 @@
 
 ### 下一步与判定规则
 
-先归集版本并修复连续音频，再落实家庭服务与端侧视觉、离线语音、语义业务闭环，最后综合验收及提交。详见[冲刺计划](docs/HomeMind_比赛冲刺计划_2026-08-30_至_2026-09-20.md)、[证据索引](docs/submission/HomeMind_最终材料证据索引.md)与[后续路线](docs/HomeMind_后续路线与评估_2026-09-06.md)。
+先收口摄像头访问冻结的可复核定位并修复连续音频，再推进端侧视觉、离线语音、云端入口隐私边界和语义业务闭环；家庭服务家庭侧已落地，云端 relay/入口验收、小程序真机与跨端验收仍待完成，最后综合验收及提交。详见[冲刺计划](docs/HomeMind_比赛冲刺计划_2026-08-30_至_2026-09-20.md)、[证据索引](docs/submission/HomeMind_最终材料证据索引.md)与[后续路线](docs/HomeMind_后续路线与评估_2026-09-06.md)。
 
 状态仅用：**已验收**（限定场景有日期、证据和版本）、**部分完成**（子项有证据而目标不全）、**待验证**（已有实现或记录但证据不足）、**未实现**（目标能力尚未接入）。不使用总体完成百分比，不用局部测试勾选整个里程碑。每项完成声明必须关联测试日期、证据和源码/产物版本；缺项保留缺口。
 

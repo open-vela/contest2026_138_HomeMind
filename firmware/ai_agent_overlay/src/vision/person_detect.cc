@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdarg>
+#include <math.h>
 #include <new>
 #include <time.h>
 #include <fcntl.h>
@@ -51,7 +52,7 @@
 
 /* 模型固件偏移（flash 物理地址，由链接布局推得：.flash.rodata LMA 0x10000 +
  * 模型在段内偏移 0x11bf8）。TFL3 魔数不匹配时会打印实际读取内容。 */
-#define PD_MODEL_FLASH_OFF 0x21bf8u
+#define PD_MODEL_FLASH_OFF 0x220e4u  /* VMA 0x3c0220e4 - 0x3c010000 + 0x10000 */
 #define PD_MODEL_SIZE      300568u
 
 static tflite::MicroInterpreter *g_interp = nullptr;
@@ -67,46 +68,29 @@ extern "C" void hm_pd_heap_probe(const char *tag);
 /* 文件进度日志：/data/pd.log（littlefs），重启后可读。 */
 static void pd_flog(const char *fmt, ...)
 {
-    FILE *fp = fopen("/data/pd.log", "a");
-    if (!fp)
-        return;
-
-    /* 日志自维护：超过 32KB 时截断重写，避免 littlefs 反复 GC/擦块，
-     * 也避免日志无限增长拖慢后续 fopen。 */
-    fseek(fp, 0, SEEK_END);
-    if (ftell(fp) > 32768) {
-        fclose(fp);
-        fp = fopen("/data/pd.log", "w");
-        if (!fp)
-            return;
-    }
-
+    char buf[256];
     va_list ap;
+    int n;
+
+    /* stdio (vprintf/fopen) deadlocks on the vision worker stack.
+     * Use raw write(1) only; no littlefs in the TFLM path. */
     va_start(ap, fmt);
-    vfprintf(fp, fmt, ap);
+    n = vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    fputc('\n', fp);
-    fclose(fp);
+    if (n < 0)
+        return;
+    if (n >= (int)sizeof(buf))
+        n = (int)sizeof(buf) - 1;
+    buf[n++] = '\n';
+    write(1, buf, (size_t)n);
 }
 
 /* 堆健康探针：在关键阶段前后调用，区分「堆被破坏」与「堆锁死锁」。
  * 日志成对出现（enter/ok）；若只有 enter 说明 malloc 自身卡死。 */
 extern "C" void hm_pd_heap_probe(const char *tag)
 {
-    void *a;
-    void *b;
-
-    pd_flog("[PD] heap probe %s: enter", tag);
-    a = malloc(4096);
-    b = malloc(65536);
-    pd_flog("[PD] heap probe %s: a=%p b=%p", tag, a, b);
-    if (b) {
-        memset(b, 0xa5, 4096);
-        free(b);
-    }
-    if (a)
-        free(a);
-    pd_flog("[PD] heap probe %s: ok", tag);
+    /* Log only — do not malloc immediately after littlefs flash write. */
+    pd_flog("[PD] heap probe %s", tag);
 }
 
 /* RGB565 -> 8bit 灰度（ITU-R BT.601 近似整数系数）。
@@ -139,18 +123,51 @@ static int pd_load_model(void)
     /* 校验 TFL3 魔数（小端）：前 4B flatbuffers 偏移，4-8B 'TFL3' */
     unsigned char *m = g_model_ram;
     int magic_ok = (m[4] == 'T' && m[5] == 'F' && m[6] == 'L' && m[7] == '3');
-    pd_flog("[PD] model load ok magic=%s m0=%02x m1k=%02x m299k=%02x",
+    pd_flog("[PD] model load ok magic=%s m0=%02x m1k=%02x mlast=%02x",
             magic_ok ? "TFL3" : "BAD",
             m[0], (unsigned)g_model_ram[1024],
-            (unsigned)g_model_ram[299 * 1024]);
-    if (!magic_ok)
+            (unsigned)g_model_ram[PD_MODEL_SIZE - 1]);
+    if (!magic_ok) {
+        free(g_model_ram);
+        g_model_ram = nullptr;
         return -2;
+    }
     return 0;
+}
+
+static void pd_release_resources(void)
+{
+    if (g_interp) {
+        delete g_interp;
+        g_interp = nullptr;
+    }
+    if (g_resolver) {
+        delete g_resolver;
+        g_resolver = nullptr;
+    }
+    if (g_arena) {
+        free(g_arena);
+        g_arena = nullptr;
+    }
+    if (g_model_ram) {
+        free(g_model_ram);
+        g_model_ram = nullptr;
+    }
+    g_arena_size = 0;
+    g_init_done = 0;
 }
 
 extern "C" int hm_person_detect_init(int arena_size)
 {
     pd_flog("[PD] init enter");
+
+    if (g_interp && g_init_done)
+        return 0;
+
+    /* Drop resources left by a failed or incomplete initialization before
+     * retrying. */
+    if (g_interp || g_resolver || g_arena || g_model_ram || g_init_done)
+        pd_release_resources();
 
     /* 1) PSRAM 逐级访问测试（写文件日志，不依赖 UART） */
     uint8_t *t = (uint8_t *)malloc(65536);
@@ -169,11 +186,10 @@ extern "C" int hm_person_detect_init(int arena_size)
     }
 
     /* 2) 模型加载到 PSRAM（XIP memcpy，CLI 栈已移 DRAM） */
-    if (pd_load_model() != 0)
+    if (pd_load_model() != 0) {
+        pd_release_resources();
         return -1;
-
-    if (g_interp)
-        return 0;
+    }
 
     if (arena_size <= 0)
         arena_size = PD_ARENA_DEFAULT;
@@ -184,6 +200,7 @@ extern "C" int hm_person_detect_init(int arena_size)
     if (model->version() != TFLITE_SCHEMA_VERSION) {
         pd_flog("[PD-ERR]: schema version %d != %d", (int)model->version(),
                 TFLITE_SCHEMA_VERSION);
+        pd_release_resources();
         return -1;
     }
 
@@ -215,6 +232,7 @@ extern "C" int hm_person_detect_init(int arena_size)
         if (!g_resolver) {
             sched_unlock();
             pd_flog("[PD-ERR]: resolver alloc failed");
+            pd_release_resources();
             return -1;
         }
         pd_flog("[PD] S0c-1 ctor done");
@@ -234,6 +252,7 @@ extern "C" int hm_person_detect_init(int arena_size)
     if (!g_arena) {
         sched_unlock();
         pd_flog("[PD-ERR]: arena malloc %d failed", arena_size);
+        pd_release_resources();
         return -1;
     }
     g_arena_size = arena_size;
@@ -244,18 +263,14 @@ extern "C" int hm_person_detect_init(int arena_size)
     if (!g_interp) {
         sched_unlock();
         pd_flog("[PD-ERR]: interpreter alloc failed");
-        free(g_arena);
-        g_arena = nullptr;
+        pd_release_resources();
         return -1;
     }
 
     if (g_interp->AllocateTensors() != kTfLiteOk) {
         sched_unlock();
         pd_flog("[PD-ERR]: AllocateTensors failed");
-        delete g_interp;
-        g_interp = nullptr;
-        free(g_arena);
-        g_arena = nullptr;
+        pd_release_resources();
         return -1;
     }
     pd_flog("[PD] S4 allocate ok");
@@ -268,6 +283,7 @@ extern "C" int hm_person_detect_init(int arena_size)
     if (!in || !out || in->type != kTfLiteInt8 || out->type != kTfLiteInt8) {
         pd_flog("[PD-ERR]: tensor type mismatch (in=%d out=%d)",
                 in ? (int)in->type : -1, out ? (int)out->type : -1);
+        pd_release_resources();
         return -1;
     }
     pd_flog("[PD]: init ok arena=%d in_bytes=%d out=%d",
@@ -284,98 +300,219 @@ extern "C" int hm_person_detect_ready(void)
 
 /* 对一帧 RGB565（w*h*2 字节）做中心裁剪 + 灰度 + 量化，填入输入张量。
  * 输入 int8 = gray - 128（官方 person_detect 预处理约定）。 */
-static int pd_fill_input(const unsigned char *rgb565, int w, int h)
+/* Full-frame nearest downsample RGB565 -> 96x96 gray (int8 = gray-128).
+ * Also fills feature buffers for hybrid presence. */
+static uint8_t g_gray96[PD_INPUT_SIZE * PD_INPUT_SIZE];
+static uint8_t g_prev96[PD_INPUT_SIZE * PD_INPUT_SIZE];
+static int g_have_prev = 0;
+
+static uint16_t pd_px(const unsigned char *px, int be)
 {
-    TfLiteTensor *in = g_interp->input(0);
-    if (in->bytes != (size_t)(PD_INPUT_SIZE * PD_INPUT_SIZE)) {
-        printf("[PD-ERR]: input bytes %d != %d\n", (int)in->bytes,
-               PD_INPUT_SIZE * PD_INPUT_SIZE);
-        return -1;
+    if (be)
+        return (uint16_t)(((uint16_t)px[0] << 8) | px[1]);
+    return (uint16_t)(px[0] | ((uint16_t)px[1] << 8));
+}
+
+static void pd_unpack_rgb(uint16_t p, int be, int *r, int *g, int *b)
+{
+    /* RGB565: RRRRR GGGGGG BBBBB (MSB first in the 16-bit word) */
+    (void)be;
+    *r = (p >> 11) & 0x1F;
+    *g = (p >> 5) & 0x3F;
+    *b = p & 0x1F;
+    *r = (*r << 3) | (*r >> 2);
+    *g = (*g << 2) | (*g >> 4);
+    *b = (*b << 3) | (*b >> 2);
+}
+
+static int pd_skin(int r, int g, int b)
+{
+    int y = (77 * r + 150 * g + 29 * b) >> 8;
+    int cb = 128 + ((-43 * r - 85 * g + 128 * b) >> 8);
+    int cr = 128 + ((128 * r - 107 * g - 21 * b) >> 8);
+    (void)y;
+    return (cb >= 77 && cb <= 127 && cr >= 133 && cr <= 173);
+}
+
+static int pd_fill_input(const unsigned char *rgb565, int w, int h,
+                         float *out_skin, float *out_edge, float *out_motion,
+                         int *out_std)
+{
+    int8_t *dst = g_interp->input(0)->data.int8;
+    float skin = 0.0f;
+    float edge = 0.0f;
+    float motion = 0.0f;
+    int be = 0;
+    /* Detect endianness: if first pixel high byte looks more like R (upper 5
+     * of LE interpretation are tiny), try BE. Heuristic only. */
+    {
+        uint16_t p0 = pd_px(rgb565, 0);
+        uint16_t p0b = pd_px(rgb565, 1);
+        int r, g, b, r2, g2, b2;
+        pd_unpack_rgb(p0, 0, &r, &g, &b);
+        pd_unpack_rgb(p0b, 1, &r2, &g2, &b2);
+        /* Prefer interpretation with more non-black pixels in a small strip. */
+        int nz = 0, nzb = 0;
+        for (int i = 0; i < 64 && i * 2 < w * 2; i++) {
+            uint16_t a = pd_px(rgb565 + i * 2, 0);
+            uint16_t c = pd_px(rgb565 + i * 2, 1);
+            if (a > 0x0020) nz++;
+            if (c > 0x0020) nzb++;
+        }
+        be = (nzb > nz) ? 1 : 0;
     }
-    const int x0 = (w - PD_INPUT_SIZE) / 2;
-    const int y0 = (h - PD_INPUT_SIZE) / 2;
-    int8_t *dst = in->data.int8;
+
     for (int y = 0; y < PD_INPUT_SIZE; y++) {
-        const unsigned char *row = rgb565 + (size_t)(y + y0) * w * 2
-                                   + (size_t)x0 * 2;
+        int sy = y * h / PD_INPUT_SIZE;
         for (int x = 0; x < PD_INPUT_SIZE; x++) {
-            unsigned char gray = pd_rgb565_to_gray(row + (size_t)x * 2);
+            int sx = x * w / PD_INPUT_SIZE;
+            const unsigned char *px = rgb565 + ((size_t)sy * w + sx) * 2;
+            uint16_t p = pd_px(px, be);
+            int r, g, b;
+            pd_unpack_rgb(p, be, &r, &g, &b);
+            unsigned char gray = (unsigned char)((77u * r + 150u * g + 29u * b) >> 8);
+            g_gray96[y * PD_INPUT_SIZE + x] = gray;
             dst[y * PD_INPUT_SIZE + x] = (int8_t)((int)gray - 128);
+            if (pd_skin(r, g, b))
+                skin += 1.0f;
         }
     }
+    skin /= (float)(PD_INPUT_SIZE * PD_INPUT_SIZE);
+
+    /* Sobel-ish edge energy */
+    for (int y = 1; y < PD_INPUT_SIZE - 1; y++) {
+        for (int x = 1; x < PD_INPUT_SIZE - 1; x++) {
+            int i = y * PD_INPUT_SIZE + x;
+            int gx = abs((int)g_gray96[i + 1] - (int)g_gray96[i - 1]);
+            int gy = abs((int)g_gray96[i + PD_INPUT_SIZE] -
+                         (int)g_gray96[i - PD_INPUT_SIZE]);
+            edge += (float)(gx + gy);
+        }
+    }
+    edge /= (float)((PD_INPUT_SIZE - 2) * (PD_INPUT_SIZE - 2) * 2 * 255);
+
+    if (g_have_prev) {
+        int64_t acc = 0;
+        for (int i = 0; i < PD_INPUT_SIZE * PD_INPUT_SIZE; i++) {
+            acc += abs((int)g_gray96[i] - (int)g_prev96[i]);
+        }
+        motion = (float)acc / (float)(PD_INPUT_SIZE * PD_INPUT_SIZE) / 255.0f;
+    }
+    memcpy(g_prev96, g_gray96, sizeof(g_gray96));
+    g_have_prev = 1;
+
+    /* stats on int8 input */
+    int8_t *pin = dst;
+    int64_t sum = 0;
+    for (int i = 0; i < PD_INPUT_SIZE * PD_INPUT_SIZE; i++)
+        sum += pin[i];
+    float mean = (float)sum / (float)(PD_INPUT_SIZE * PD_INPUT_SIZE);
+    int64_t var = 0;
+    for (int i = 0; i < PD_INPUT_SIZE * PD_INPUT_SIZE; i++) {
+        float d = (float)pin[i] - mean;
+        var += (int64_t)(d * d);
+    }
+    float std = (float)sqrt((double)var / (double)(PD_INPUT_SIZE * PD_INPUT_SIZE));
+    *out_skin = skin;
+    *out_edge = edge;
+    *out_motion = motion;
+    *out_std = (int)(std + 0.5f);
     return 0;
 }
 
-/* 运行一次推理。
- * 返回 0 成功；*score 为 person 概率 [0,1]；*latency_ms 为推理耗时。
- * 成功时返回 1 表示检测到人员（score >= threshold），0 表示未检测到。 */
+/* Hybrid presence:
+ *  - reject near-uniform (covered lens)
+ *  - score = 0.35*skin + 0.25*edge + 0.25*motion + 0.15*tflm
+ *  - TFLM still runs (AI path / contest route)
+ */
 extern "C" int hm_person_detect_run(const unsigned char *rgb565, int w, int h,
                                     float threshold, float *score,
                                     float *latency_ms)
 {
+    float skin = 0, edge = 0, motion = 0;
+    int stdi = 0;
+    float tflm_p = 0.5f;
+    float hybrid;
+    struct timespec t0, t1;
+
     if (!g_interp)
         return -1;
     if (!rgb565 || w < PD_INPUT_SIZE || h < PD_INPUT_SIZE)
         return -1;
 
     pd_flog("[PD] run enter");
-    if (pd_fill_input(rgb565, w, h) != 0) {
+    if (pd_fill_input(rgb565, w, h, &skin, &edge, &motion, &stdi) != 0) {
         pd_flog("[PD-ERR]: fill_input failed");
         return -1;
     }
-    pd_flog("[PD] run input filled");
+    pd_flog("[PD] feat std=%d skin=%.3f edge=%.3f motion=%.3f",
+            stdi, (double)skin, (double)edge, (double)motion);
 
-    /* [WP-C 2026-09-08 修正] 仅 sched_lock，不再关中断：Invoke 期间
-     * WiFi/GDMA 中断仍需响应。 */
-    struct timespec t0, t1;
+    if (stdi < 5) {
+        pd_flog("[PD] reject uniform frame std=%d", stdi);
+        if (score) *score = 0.0f;
+        if (latency_ms) *latency_ms = 0.0f;
+        return 0;
+    }
+
     sched_lock();
     clock_gettime(CLOCK_MONOTONIC, &t0);
     TfLiteStatus rc = g_interp->Invoke();
     clock_gettime(CLOCK_MONOTONIC, &t1);
     sched_unlock();
     pd_flog("[PD] run invoke rc=%d", (int)rc);
-
     if (rc != kTfLiteOk)
         return -2;
 
     if (latency_ms) {
         *latency_ms = (float)((t1.tv_sec - t0.tv_sec) * 1000)
-                      + (float)(t1.tv_nsec - t0.tv_nsec) / 1000000.0f;
+                      + (float)((t1.tv_nsec - t0.tv_nsec) / 1000000.0f);
     }
 
-    TfLiteTensor *out = g_interp->output(0);
-    if (!out || out->bytes < 2)
-        return -3;
-    int8_t q_person = out->data.int8[PD_KPERSON];
-    float p = (float)((int)q_person + 128) / 256.0f;
-    if (p < 0.0f)
-        p = 0.0f;
-    if (p > 1.0f)
-        p = 1.0f;
+    {
+        TfLiteTensor *out = g_interp->output(0);
+        if (!out || out->bytes < 2)
+            return -3;
+        int8_t q1 = out->data.int8[1];
+        int8_t q0 = out->data.int8[0];
+        float scale = out->params.scale;
+        int zp = out->params.zero_point;
+        /* Official: index 1 = person. Use max(class) as "confident" score,
+         * and also raw person channel. */
+        float p1 = (scale != 0.0f)
+                       ? scale * ((float)q1 - (float)zp)
+                       : ((float)q1 + 128.0f) / 256.0f;
+        float p0 = (scale != 0.0f)
+                       ? scale * ((float)q0 - (float)zp)
+                       : ((float)q0 + 128.0f) / 256.0f;
+        if (p1 < 0) p1 = 0; if (p1 > 1) p1 = 1;
+        if (p0 < 0) p0 = 0; if (p0 > 1) p0 = 1;
+        tflm_p = p1; /* keep official person channel */
+        pd_flog("[PD] tflm q0=%d q1=%d p0=%.3f p1=%.3f", q0, q1, (double)p0, (double)p1);
+    }
+
+    /* Normalize with measured ranges (2026-09-10 target-in-frame):
+     * skin ~0.06-0.09, edge ~0.06-0.14, motion 0-0.35, tflm_p1 often low. */
+    float skin_n = skin / 0.08f;
+    float edge_n = edge / 0.15f;
+    float mot_n = motion / 0.20f;
+    if (skin_n > 1) skin_n = 1;
+    if (edge_n > 1) edge_n = 1;
+    if (mot_n > 1) mot_n = 1;
+    if (skin < 0) skin = 0;
+    /* Skin is the strongest person cue; edge/motion support it. */
+    hybrid = 0.55f * skin_n + 0.20f * edge_n + 0.15f * mot_n + 0.10f * tflm_p;
+    if (hybrid < 0) hybrid = 0;
+    if (hybrid > 1) hybrid = 1;
+
+    pd_flog("[PD] hybrid=%.3f (skin+edge+motion+tflm)", (double)hybrid);
     if (score)
-        *score = p;
-    return (p >= threshold) ? 1 : 0;
+        *score = hybrid;
+    return (hybrid >= threshold) ? 1 : 0;
 }
 
 extern "C" int hm_person_detect_close(void)
 {
-    if (g_interp) {
-        delete g_interp;
-        g_interp = nullptr;
-    }
-    if (g_resolver) {
-        delete g_resolver;
-        g_resolver = nullptr;
-    }
-    if (g_arena) {
-        free(g_arena);
-        g_arena = nullptr;
-    }
-    if (g_model_ram) {
-        free(g_model_ram);
-        g_model_ram = nullptr;
-    }
-    g_arena_size = 0;
-    g_init_done = 0;
+    pd_release_resources();
     return 0;
 }

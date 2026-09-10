@@ -126,13 +126,13 @@ CSRCS += src/channels/ws_server.c
 
 # voice/ - 语音管线
 ifeq ($(CONFIG_MEDIA),y)
+CSRCS += src/voice/audio_capture.c
 CSRCS += src/voice/voice_channel.c
 CSRCS += src/voice/voice_tts.c
 CSRCS += src/voice/voice_asr.c
 CSRCS += src/voice/volc_tts.c
 CSRCS += src/voice/volc_tts_ws.c
 CSRCS += src/voice/volc_asr.c
-CSRCS += src/voice/audio_capture.c
 CSRCS += src/voice/audio_playback.c
 endif
 
