@@ -39,6 +39,7 @@
 #include "infra/vela_tls.h"
 #include "tools/tool_get_time.h"
 #include "tools/tool_proxyquickapp.h"
+#include "channels/mqtt_channel.h"
 #include "tools/tool_registry.h"
 #include "tools/tool_web_search.h"
 #include "agent_compat.h"
@@ -59,6 +60,7 @@
 #endif
 
 #include <malloc.h>
+#include <math.h>
 #include <pthread.h>
 #include <arpa/inet.h>
 #include <errno.h>
@@ -71,6 +73,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
+#include <nuttx/ioexpander/gpio.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
@@ -154,6 +157,10 @@ static void cmd_help(void)
         "  voice_test_tts <text> [out.pcm] - Test TTS synthesis\n"
         "  voice_test_asr <file>  - Test ASR recognition\n"
         "  media_probe [jpeg]   - Probe OV2640 RGB565 frame + I2S mic (jpeg: only if sensor supports it)\n"
+        "  audio_stream [sec]     - Continuous PCM capture via audio_capture API\n"
+        "  wake_loop [sec] [thr] [hold] - Energy VAD wake + LED blink\n"
+        "  wake_rec pos|neg <i> [sec] - Record KWS sample to /data\n"
+        "  kws_dump pos|neg <i> - Dump sample as base64\n"
         "  set_voice_tts <name>   - Switch TTS backend\n"
         "  set_voice_asr <name>   - Switch ASR backend\n"
         "  set_weixin_token <tok> - Set WeChat bot token\n"
@@ -368,60 +375,134 @@ void hm_pd_heap_probe(const char *tag);
 int hm_person_detect_ready(void);
 #endif
 
+#ifdef CONFIG_TFLITEMICRO
+/* [2026-09-10] TFLM hangs on PSRAM CLI stack (pd.log stops at heap-probe
+ * malloc). Run init/capture/run on a dedicated 32KB DRAM stack worker.
+ * Do NOT move the whole CLI stack into DRAM BSS — that froze media_probe. */
+struct pd_job_s {
+    float threshold;
+    int init_rc;
+    int cap_n;
+    int run_rc;
+    float score;
+    float ms;
+};
+
+static uint8_t g_pd_stack[32 * 1024] __attribute__((aligned(16)));
+
+static int pd_job_body(struct pd_job_s *job)
+{
+    static unsigned char *frame = NULL;
+
+    write(1, "[Vision-local]: body A\n", 23);
+    hm_pd_heap_probe("pre-init");
+    write(1, "[Vision-local]: body B after probe\n", 35);
+    job->init_rc = hm_person_detect_init(0);
+    hm_pd_heap_probe("post-init");
+    if (job->init_rc != 0)
+        return -1;
+
+    printf("[Vision-local]: capturing frame...\n");
+    fflush(stdout);
+    hm_pd_heap_probe("pre-capture");
+    if (!frame)
+        frame = (unsigned char *)malloc(HM_MEDIA_FRAME_BYTES);
+    if (!frame) {
+        job->cap_n = -1;
+        return -1;
+    }
+    job->cap_n = hm_media_capture_rgb565(frame, HM_MEDIA_FRAME_BYTES);
+    hm_pd_heap_probe("post-capture");
+    if (job->cap_n != HM_MEDIA_FRAME_BYTES)
+        return -1;
+
+    printf("[Vision-local]: capture ok, running inference...\n");
+    fflush(stdout);
+    job->run_rc = hm_person_detect_run(frame, 320, 240, job->threshold,
+                                       &job->score, &job->ms);
+    if (job->run_rc >= 0)
+      {
+        char ev[160];
+        snprintf(ev, sizeof(ev),
+                 "{\"type\":\"person_detected\",\"score\":%.3f,"
+                 "\"detected\":%d,\"threshold\":%.2f,\"ms\":%.0f}",
+                 job->score, job->run_rc ? 1 : 0, job->threshold, job->ms);
+        if (mqtt_channel_send("homemind", ev) == 0)
+          printf("[Vision-local]: mqtt event published\n");
+        else
+          printf("[Vision-local]: mqtt event not published (offline)\n");
+        fflush(stdout);
+      }
+    return job->run_rc < 0 ? -1 : 0;
+}
+
+static void *pd_worker(void *arg)
+{
+    write(1, "[Vision-local]: worker enter\n", 29);
+    pd_job_body((struct pd_job_s *)arg);
+    printf("[Vision-local]: worker leave init_rc=%d cap_n=%d run_rc=%d\n",
+           ((struct pd_job_s *)arg)->init_rc,
+           ((struct pd_job_s *)arg)->cap_n,
+           ((struct pd_job_s *)arg)->run_rc);
+    fflush(stdout);
+    return NULL;
+}
+#endif /* CONFIG_TFLITEMICRO */
+
 static void cmd_vision(int argc, char **argv)
 {
 #ifdef CONFIG_TFLITEMICRO
     /* 端侧离线推理：vision local [threshold] */
     if (argc > 1 && strcmp(argv[1], "local") == 0) {
-        static unsigned char *frame = NULL;
-        float threshold = 0.5f;
-        float score = 0.0f;
-        float ms = 0.0f;
+        struct pd_job_s job;
+        pthread_attr_t attr;
+        pthread_t tid;
+        void *ret = NULL;
         int rc;
-        int n;
         int i;
 
+        memset(&job, 0, sizeof(job));
+        job.threshold = 0.35f;
         for (i = 2; i < argc; i++) {
             char *end = NULL;
             float v = strtof(argv[i], &end);
             if (end && *end == '\0' && v > 0.0f && v <= 1.0f)
-                threshold = v;
+                job.threshold = v;
         }
 
-        if (!frame)
-            frame = malloc(HM_MEDIA_FRAME_BYTES);
-        if (!frame) {
-            printf("[Vision-ERR]: alloc failed\n");
-            return;
-        }
+        printf("[Vision-local]: worker stack=%p\n", (void *)g_pd_stack);
+        fflush(stdout);
 
-        /* 正确顺序：init -> capture -> run。
-         * 堆探针贯穿全程，卡死时 /data/pd.log 可定位到具体阶段。 */
-        hm_pd_heap_probe("pre-init");
-        rc = hm_person_detect_init(0);
-        hm_pd_heap_probe("post-init");
+        pthread_attr_init(&attr);
+        pthread_attr_setstack(&attr, g_pd_stack, sizeof(g_pd_stack));
+        rc = pthread_create(&tid, &attr, pd_worker, &job);
+        pthread_attr_destroy(&attr);
+        printf("[Vision-local]: create rc=%d tid=%d\n", rc, (int)tid);
+        fflush(stdout);
         if (rc != 0) {
-            printf("[Vision-ERR]: person detect init failed rc=%d\n", rc);
+            printf("[Vision-ERR]: pd worker create rc=%d\n", rc);
             return;
         }
+        rc = pthread_join(tid, &ret);
+        printf("[Vision-local]: join rc=%d ret=%p\n", rc, ret);
+        fflush(stdout);
 
-        printf("[Vision-local]: capturing frame...\n");
-        hm_pd_heap_probe("pre-capture");
-        n = hm_media_capture_rgb565(frame, HM_MEDIA_FRAME_BYTES);
-        hm_pd_heap_probe("post-capture");
-        if (n != HM_MEDIA_FRAME_BYTES) {
-            printf("[Vision-ERR]: capture failed n=%d\n", n);
+        if (job.init_rc != 0) {
+            printf("[Vision-ERR]: person detect init failed rc=%d\n",
+                   job.init_rc);
             return;
         }
-        printf("[Vision-local]: capture ok, running inference...\n");
-
-        rc = hm_person_detect_run(frame, 320, 240, threshold, &score, &ms);
-        if (rc < 0) {
-            printf("[Vision-ERR]: inference failed rc=%d\n", rc);
+        if (job.cap_n != HM_MEDIA_FRAME_BYTES) {
+            printf("[Vision-ERR]: capture failed n=%d\n", job.cap_n);
+            return;
+        }
+        if (job.run_rc < 0) {
+            printf("[Vision-ERR]: inference failed rc=%d\n", job.run_rc);
             return;
         }
         printf("[Vision-local]: person=%.3f threshold=%.2f %s (latency=%.1fms)\n",
-               score, threshold, rc ? "DETECTED" : "none", ms);
+               job.score, job.threshold,
+               job.run_rc ? "DETECTED" : "none", job.ms);
         return;
     }
 #endif /* CONFIG_TFLITEMICRO */
@@ -838,6 +919,523 @@ static void cmd_voice(int argc, char **argv)
     (void)i;
 }
 
+
+
+
+
+
+
+
+/* Single-session streaming: enqueue, wait, copy, free, repeat.
+ * audio_poll only waits correctly for the first buffer; later waits use
+ * usleep (640B@16kHz ≈ 20ms). Recycle APBs to stay within MAXINFLIGHT=4. */
+static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
+{
+    const char *path = "/dev/audio/pcm_in0";
+    struct audio_caps_desc_s caps;
+    struct audio_buf_desc_s desc;
+    struct ap_buffer_info_s info;
+    struct pollfd pfd;
+    struct ap_buffer_s *apb = NULL;
+    int bsize = 640;
+    int got = 0;
+    int fd;
+    int started = 0;
+    int chunk = 0;
+
+    fd = open(path, O_RDWR | O_NONBLOCK);
+    if (fd < 0) {
+        printf("[Audio] open errno=%d\n", errno);
+        return -1;
+    }
+    memset(&caps, 0, sizeof(caps));
+    caps.caps.ac_len = sizeof(struct audio_caps_s);
+    caps.caps.ac_type = AUDIO_TYPE_INPUT;
+    caps.caps.ac_controls.w = rate;
+    caps.caps.ac_controls.b[2] = 16;
+    caps.caps.ac_channels = 1;
+    caps.caps.ac_format.hw = AUDIO_FMT_PCM;
+    if (ioctl(fd, AUDIOIOC_CONFIGURE, (uintptr_t)&caps) < 0) {
+        close(fd);
+        return -1;
+    }
+    (void)ioctl(fd, AUDIOIOC_GETBUFFERINFO, (uintptr_t)&info);
+
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+
+    while (got < want) {
+        memset(&desc, 0, sizeof(desc));
+        desc.numbytes = bsize;
+        desc.u.pbuffer = &apb;
+        if (ioctl(fd, AUDIOIOC_ALLOCBUFFER, (uintptr_t)&desc) !=
+                (int)sizeof(desc) || !apb)
+            break;
+        memset(&desc, 0, sizeof(desc));
+        desc.u.buffer = apb;
+        desc.numbytes = bsize;
+        if (ioctl(fd, AUDIOIOC_ENQUEUEBUFFER, (uintptr_t)&desc) < 0) {
+            memset(&desc, 0, sizeof(desc));
+            desc.u.buffer = apb;
+            ioctl(fd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
+            printf("[Audio] enq fail chunk=%d\n", chunk);
+            break;
+        }
+        if (!started) {
+            if (ioctl(fd, AUDIOIOC_START, 0) < 0) {
+                printf("[Audio] start fail\n");
+                break;
+            }
+            started = 1;
+        }
+        if (chunk == 0)
+            poll(&pfd, 1, 800);
+        else
+            usleep(30000);
+        if (apb->nbytes > 0 && got + apb->nbytes <= want) {
+            memcpy(dst + got, apb->samp, apb->nbytes);
+            got += apb->nbytes;
+        }
+        chunk++;
+        if (chunk <= 4 || chunk % 10 == 0)
+            printf("[Audio] chunk=%d nbytes=%u total=%d\n",
+                   chunk, apb->nbytes, got);
+        memset(&desc, 0, sizeof(desc));
+        desc.u.buffer = apb;
+        ioctl(fd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
+        apb = NULL;
+        if (chunk > 200)
+            break;
+    }
+    if (started)
+        ioctl(fd, AUDIOIOC_STOP, 0);
+    close(fd);
+    return got;
+}
+
+static void cmd_audio_stream(int argc, char **argv)
+{
+    int seconds = 2;
+    int rate = 16000;
+    int want;
+    int got;
+    unsigned char *buf;
+    long sum_sq = 0;
+    int peak = 0;
+    int i;
+    double rms;
+
+    if (argc > 1) {
+        int v = atoi(argv[1]);
+        if (v > 0 && v <= 10)
+            seconds = v;
+    }
+    want = seconds * rate * 2;
+    buf = (unsigned char *)malloc((size_t)want);
+    if (!buf) {
+        printf("[Audio-ERR] alloc\n");
+        return;
+    }
+    printf("[Audio] stream-session %ds @%dHz\n", seconds, rate);
+    got = hm_audio_stream_session(buf, want, rate);
+    for (i = 0; i + 1 < got; i += 2) {
+        int s = (int)(int16_t)(buf[i] | (buf[i + 1] << 8));
+        sum_sq += (long)s * s;
+        if (s < 0)
+            s = -s;
+        if (s > peak)
+            peak = s;
+    }
+    rms = (got >= 2) ? sqrt((double)sum_sq / (double)(got / 2)) : 0.0;
+    printf("[Audio] DONE bytes=%d/%d peak=%d rms=%.1f\n",
+           got, want, peak, rms);
+    if (got >= want * 8 / 10)
+        printf("[Audio] PASS continuous\n");
+    else if (got >= 640 * 4)
+        printf("[Audio] PARTIAL\n");
+    else
+        printf("[Audio] FAIL\n");
+    free(buf);
+}
+
+
+
+/* ── Offline wake loop (energy VAD + local LED) ──────────────────
+ * Uses the working single-session I2S recipe (poll first chunk, then
+ * usleep). This is an energy / voice-activity wake, NOT a trained
+ * keyword model for "你好，openvela". Structured so a KWS model can
+ * replace hm_wake_score() later. */
+#define HM_WAKE_CHUNK     640
+#define HM_WAKE_RATE      16000
+#define HM_WAKE_RUN_MAX   600   /* ~12s of 20ms chunks; override via argv */
+
+static int hm_led_blink(int times, int on_ms, int off_ms)
+{
+    int fd = open("/dev/gpio0", O_RDWR);
+    int i;
+    if (fd < 0)
+        return -1;
+    for (i = 0; i < times; i++) {
+        ioctl(fd, GPIOC_WRITE, 1UL);
+        usleep(on_ms * 1000);
+        ioctl(fd, GPIOC_WRITE, 0UL);
+        usleep(off_ms * 1000);
+    }
+    close(fd);
+    return 0;
+}
+
+static float hm_chunk_rms(const unsigned char *buf, int nbytes)
+{
+    long sum = 0;
+    int n = nbytes / 2;
+    int i;
+    if (n <= 0)
+        return 0.0f;
+    for (i = 0; i + 1 < nbytes; i += 2) {
+        int s = (int)(int16_t)(buf[i] | (buf[i + 1] << 8));
+        sum += (long)s * s;
+    }
+    return (float)sqrt((double)sum / (double)n);
+}
+
+/* wake if rms >= thr for hold consecutive chunks */
+static int hm_wake_score(float rms, float thr, int *hold_need, int *hold_now)
+{
+    if (rms >= thr) {
+        (*hold_now)++;
+        if (*hold_now >= *hold_need) {
+            *hold_now = 0;
+            return 1;
+        }
+    } else {
+        *hold_now = 0;
+    }
+    return 0;
+}
+
+
+/* Record labeled PCM for KWS training: wake_rec pos|neg <index> [sec]
+ * Writes /data/kws_<label>_<idx>.pcm  (s16le 16k mono). */
+
+static void cmd_kws_dump(int argc, char **argv)
+{
+    char path[64];
+    const char *label = "pos";
+    int idx = 1;
+    FILE *fp;
+    unsigned char buf[57];
+    char b64[80];
+    static const char enc[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    int n;
+    int i;
+
+    if (argc >= 3) {
+        label = argv[1];
+        idx = atoi(argv[2]);
+    } else if (argc == 2) {
+        /* full path */
+        snprintf(path, sizeof(path), "%s", argv[1]);
+        goto dump;
+    }
+    snprintf(path, sizeof(path), "/data/kws_%s_%02d.pcm", label, idx);
+dump:
+    fp = fopen(path, "rb");
+    if (!fp) {
+        printf("KWS_ERR open %s errno=%d\\n", path, errno);
+        return;
+    }
+    printf("KWS_B64_BEGIN %s\\n", path);
+    while ((n = fread(buf, 1, 57, fp)) > 0) {
+        int o = 0;
+        for (i = 0; i < n; i += 3) {
+            unsigned v = buf[i] << 16;
+            if (i + 1 < n) v |= buf[i + 1] << 8;
+            if (i + 2 < n) v |= buf[i + 2];
+            b64[o++] = enc[(v >> 18) & 63];
+            b64[o++] = enc[(v >> 12) & 63];
+            b64[o++] = (i + 1 < n) ? enc[(v >> 6) & 63] : '=';
+            b64[o++] = (i + 2 < n) ? enc[v & 63] : '=';
+        }
+        b64[o] = 0;
+        printf("%s\\n", b64);
+    }
+    fclose(fp);
+    printf("KWS_B64_END\\n");
+}
+
+
+static void cmd_wake_rec(int argc, char **argv)
+{
+    const char *label = "pos";
+    int idx = 0;
+    int seconds = 3;
+    char path[64];
+    int rate = 16000;
+    int want;
+    int got;
+    unsigned char *buf;
+    FILE *fp;
+    int fd;
+    int started = 0;
+    struct audio_caps_desc_s caps;
+    struct audio_buf_desc_s desc;
+    struct ap_buffer_info_s info;
+    struct ap_buffer_s *apb = NULL;
+    struct pollfd pfd;
+    int bsize = 640;
+    int chunk = 0;
+
+    if (argc < 2) {
+        printf("Usage: wake_rec pos|neg <index> [sec=3]\\n");
+        return;
+    }
+    label = argv[1];
+    if (strcmp(label, "pos") != 0 && strcmp(label, "neg") != 0) {
+        printf("[Wake-ERR] label must be pos|neg\\n");
+        return;
+    }
+    if (argc >= 3)
+        idx = atoi(argv[2]);
+    if (argc >= 4) {
+        int v = atoi(argv[3]);
+        if (v > 0 && v <= 10)
+            seconds = v;
+    }
+    want = seconds * rate * 2;
+    snprintf(path, sizeof(path), "/data/kws_%s_%02d.pcm", label, idx);
+    buf = (unsigned char *)malloc((size_t)want);
+    if (!buf) {
+        printf("[Wake-ERR] alloc\\n");
+        return;
+    }
+    printf("[WakeRec] %s idx=%d sec=%d -> %s\\n", label, idx, seconds, path);
+    printf("[WakeRec] START speaking/noise now...\\n");
+    fflush(stdout);
+
+    fd = open("/dev/audio/pcm_in0", O_RDWR | O_NONBLOCK);
+    if (fd < 0) {
+        printf("[Wake-ERR] open\\n");
+        free(buf);
+        return;
+    }
+    memset(&caps, 0, sizeof(caps));
+    caps.caps.ac_len = sizeof(struct audio_caps_s);
+    caps.caps.ac_type = AUDIO_TYPE_INPUT;
+    caps.caps.ac_controls.w = rate;
+    caps.caps.ac_controls.b[2] = 16;
+    caps.caps.ac_channels = 1;
+    caps.caps.ac_format.hw = AUDIO_FMT_PCM;
+    if (ioctl(fd, AUDIOIOC_CONFIGURE, (uintptr_t)&caps) < 0) {
+        close(fd);
+        free(buf);
+        return;
+    }
+    memset(&info, 0, sizeof(info));
+    (void)ioctl(fd, AUDIOIOC_GETBUFFERINFO, (uintptr_t)&info);
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+
+    while (got < want) {
+        apb = NULL;
+        memset(&desc, 0, sizeof(desc));
+        desc.numbytes = bsize;
+        desc.u.pbuffer = &apb;
+        if (ioctl(fd, AUDIOIOC_ALLOCBUFFER, (uintptr_t)&desc) !=
+                (int)sizeof(desc) || !apb)
+            break;
+        memset(&desc, 0, sizeof(desc));
+        desc.u.buffer = apb;
+        desc.numbytes = bsize;
+        if (ioctl(fd, AUDIOIOC_ENQUEUEBUFFER, (uintptr_t)&desc) < 0) {
+            memset(&desc, 0, sizeof(desc));
+            desc.u.buffer = apb;
+            ioctl(fd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
+            break;
+        }
+        if (!started) {
+            if (ioctl(fd, AUDIOIOC_START, 0) < 0)
+                break;
+            started = 1;
+            poll(&pfd, 1, 800);
+        } else {
+            usleep(30000);
+        }
+        if (apb->nbytes > 0 && got + apb->nbytes <= want) {
+            memcpy(buf + got, apb->samp, apb->nbytes);
+            got += apb->nbytes;
+        }
+        memset(&desc, 0, sizeof(desc));
+        desc.u.buffer = apb;
+        ioctl(fd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
+        chunk++;
+    }
+    if (started)
+        ioctl(fd, AUDIOIOC_STOP, 0);
+    close(fd);
+
+    printf("[WakeRec] captured %d bytes chunks=%d\\n", got, chunk);
+    if (got < want / 2) {
+        printf("[WakeRec] FAIL short\\n");
+        free(buf);
+        return;
+    }
+    fp = fopen(path, "wb");
+    if (!fp) {
+        printf("[WakeRec] open file errno=%d\\n", errno);
+        free(buf);
+        return;
+    }
+    fwrite(buf, 1, (size_t)got, fp);
+    fclose(fp);
+    printf("[WakeRec] SAVED %s (%d bytes)\\n", path, got);
+    free(buf);
+}
+
+
+static void cmd_wake_loop(int argc, char **argv)
+{
+    int seconds = 8;
+    float thr = 400.0f;
+    int hold_need = 4;      /* ~80ms above thr */
+    int hold_now = 0;
+    int max_chunks;
+    int chunk = 0;
+    int wakes = 0;
+    int cooldown = 0;
+    int fd;
+    int started = 0;
+    struct audio_caps_desc_s caps;
+    struct audio_buf_desc_s desc;
+    struct ap_buffer_s *apb = NULL;
+    struct pollfd pfd;
+    int bsize = HM_WAKE_CHUNK;
+    float rms_log[8];
+    int rms_i = 0;
+
+    if (argc > 1) {
+        int v = atoi(argv[1]);
+        if (v > 0 && v <= 60)
+            seconds = v;
+    }
+    if (argc > 2) {
+        float t = (float)atof(argv[2]);
+        if (t > 0.0f && t < 30000.0f)
+            thr = t;
+    }
+    if (argc > 3) {
+        int h = atoi(argv[3]);
+        if (h > 0 && h < 50)
+            hold_need = h;
+    }
+    max_chunks = (seconds * HM_WAKE_RATE * 2) / bsize;
+    if (max_chunks < 10)
+        max_chunks = 10;
+    if (max_chunks > HM_WAKE_RUN_MAX)
+        max_chunks = HM_WAKE_RUN_MAX;
+
+    printf("[Wake] listen %ds thr=%.0f hold=%d (~energy VAD, not KWS)\n",
+           seconds, thr, hold_need);
+    fflush(stdout);
+
+    fd = open("/dev/audio/pcm_in0", O_RDWR | O_NONBLOCK);
+    if (fd < 0) {
+        printf("[Wake-ERR] open mic errno=%d\n", errno);
+        return;
+    }
+    memset(&caps, 0, sizeof(caps));
+    caps.caps.ac_len = sizeof(struct audio_caps_s);
+    caps.caps.ac_type = AUDIO_TYPE_INPUT;
+    caps.caps.ac_controls.w = HM_WAKE_RATE;
+    caps.caps.ac_controls.b[2] = 16;
+    caps.caps.ac_channels = 1;
+    caps.caps.ac_format.hw = AUDIO_FMT_PCM;
+    if (ioctl(fd, AUDIOIOC_CONFIGURE, (uintptr_t)&caps) < 0) {
+        printf("[Wake-ERR] config\n");
+        close(fd);
+        return;
+    }
+    {
+        struct ap_buffer_info_s info;
+        memset(&info, 0, sizeof(info));
+        if (ioctl(fd, AUDIOIOC_GETBUFFERINFO, (uintptr_t)&info) == 0)
+            printf("[Wake] info nb=%u sz=%u\n", info.nbuffers, info.buffer_size);
+    }
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+
+    while (chunk < max_chunks) {
+        float rms;
+        int w;
+
+        apb = NULL;
+        memset(&desc, 0, sizeof(desc));
+        desc.numbytes = bsize;
+        desc.u.pbuffer = &apb;
+        if (ioctl(fd, AUDIOIOC_ALLOCBUFFER, (uintptr_t)&desc) !=
+                (int)sizeof(desc) || !apb) {
+            printf("[Wake-ERR] alloc errno=%d apb=%p\n", errno, apb);
+            break;
+        }
+        memset(&desc, 0, sizeof(desc));
+        desc.u.buffer = apb;
+        desc.numbytes = bsize;
+        if (ioctl(fd, AUDIOIOC_ENQUEUEBUFFER, (uintptr_t)&desc) < 0) {
+            printf("[Wake-ERR] enq errno=%d\n", errno);
+            memset(&desc, 0, sizeof(desc));
+            desc.u.buffer = apb;
+            ioctl(fd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
+            break;
+        }
+        if (!started) {
+            if (ioctl(fd, AUDIOIOC_START, 0) < 0) {
+                printf("[Wake-ERR] start\n");
+                break;
+            }
+            started = 1;
+            poll(&pfd, 1, 800);
+        } else {
+            usleep(30000);
+        }
+
+        if (apb->nbytes > 0) {
+            rms = hm_chunk_rms(apb->samp, apb->nbytes);
+            rms_log[rms_i++ & 7] = rms;
+            if (chunk % 25 == 0) {
+                printf("[Wake] chunk=%d rms=%.1f thr=%.0f wakes=%d\n",
+                       chunk, rms, thr, wakes);
+                fflush(stdout);
+            }
+            if (cooldown > 0)
+                cooldown--;
+            else {
+                w = hm_wake_score(rms, thr, &hold_need, &hold_now);
+                if (w) {
+                    wakes++;
+                    printf("[Wake] WAKE #%d rms=%.1f -> LED blink\n",
+                           wakes, rms);
+                    fflush(stdout);
+                    hm_led_blink(3, 80, 80);
+                    cooldown = 25; /* ~0.5s refractory */
+                }
+            }
+        }
+        memset(&desc, 0, sizeof(desc));
+        desc.u.buffer = apb;
+        ioctl(fd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
+        chunk++;
+    }
+    if (started)
+        ioctl(fd, AUDIOIOC_STOP, 0);
+    close(fd);
+    printf("[Wake] DONE chunks=%d wakes=%d thr=%.0f\n", chunk, wakes, thr);
+}
+
+
 static void cmd_media_probe(int argc, char** argv)
 {
     const char* video_path = "/dev/video0";
@@ -874,13 +1472,22 @@ static void cmd_media_probe(int argc, char** argv)
            audio_path);
     fflush(stdout);
 
+    printf("MEDIA_VIDEO_STAGE open_enter\n");
+    fflush(stdout);
     video_fd = open(video_path, O_RDWR | O_NONBLOCK);
+    printf("MEDIA_VIDEO_STAGE open_exit fd=%d errno=%d\n", video_fd, errno);
+    fflush(stdout);
     if (video_fd < 0) {
         printf("MEDIA_VIDEO_FRAME_FAIL stage=open errno=%d\n", errno);
     } else {
+        printf("MEDIA_VIDEO_STAGE alloc_enter\n");
+        fflush(stdout);
         frames[0] = memalign(32, video_bytes);
         frames[1] = memalign(32, video_bytes);
         frames[2] = memalign(32, video_bytes);
+        printf("MEDIA_VIDEO_STAGE alloc_exit f0=%p f1=%p f2=%p\n",
+               frames[0], frames[1], frames[2]);
+        fflush(stdout);
         if (!frames[0] || !frames[1] || !frames[2]) {
             printf("MEDIA_VIDEO_FRAME_FAIL stage=alloc errno=%d\n", ENOMEM);
         } else {
@@ -893,6 +1500,8 @@ static void cmd_media_probe(int argc, char** argv)
                 int has_jpeg = 0;
                 int fidx;
 
+                printf("MEDIA_VIDEO_STAGE enum_fmt_enter\n");
+                fflush(stdout);
                 for (fidx = 0; fidx < 8 && !has_jpeg; fidx++) {
                     memset(&fd, 0, sizeof(fd));
                     fd.index = fidx;
@@ -905,6 +1514,9 @@ static void cmd_media_probe(int argc, char** argv)
                         has_jpeg = 1;
                     }
                 }
+                printf("MEDIA_VIDEO_STAGE enum_fmt_exit has_jpeg=%d index=%d\n",
+                       has_jpeg, fidx);
+                fflush(stdout);
                 if (has_jpeg) {
                     memset(&fmt, 0, sizeof(fmt));
                     fmt.type = type;
@@ -931,6 +1543,9 @@ static void cmd_media_probe(int argc, char** argv)
                 fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565;
                 video_ret = ioctl(video_fd, VIDIOC_S_FMT, (uintptr_t)&fmt);
             }
+            printf("MEDIA_VIDEO_STAGE s_fmt_exit ret=%d jpeg=%d errno=%d\n",
+                   video_ret, use_jpeg, errno);
+            fflush(stdout);
             if (video_ret < 0) {
                 printf("MEDIA_VIDEO_FRAME_FAIL stage=s_fmt errno=%d\n",
                        errno);
@@ -940,8 +1555,13 @@ static void cmd_media_probe(int argc, char** argv)
                 req.memory = V4L2_MEMORY_USERPTR;
                 req.count = 3;
                 req.mode = V4L2_BUF_MODE_RING;
+                printf("MEDIA_VIDEO_STAGE reqbufs_enter\n");
+                fflush(stdout);
                 video_ret = ioctl(video_fd, VIDIOC_REQBUFS,
                                   (uintptr_t)&req);
+                printf("MEDIA_VIDEO_STAGE reqbufs_exit ret=%d count=%u errno=%d\n",
+                       video_ret, req.count, errno);
+                fflush(stdout);
                 if (video_ret < 0) {
                     printf("MEDIA_VIDEO_FRAME_FAIL stage=reqbufs errno=%d\n",
                            errno);
@@ -959,12 +1579,20 @@ static void cmd_media_probe(int argc, char** argv)
                             break;
                         }
                     }
+                    printf("MEDIA_VIDEO_STAGE qbuf_exit ret=%d index=%u errno=%d\n",
+                           video_ret, (unsigned int)buf.index, errno);
+                    fflush(stdout);
                     if (video_ret < 0) {
                         printf("MEDIA_VIDEO_FRAME_FAIL stage=qbuf index=%u errno=%d\n",
                                (unsigned int)buf.index, errno);
                     } else {
+                        printf("MEDIA_VIDEO_STAGE streamon_enter\n");
+                        fflush(stdout);
                         video_ret = ioctl(video_fd, VIDIOC_STREAMON,
                                           (uintptr_t)&type);
+                        printf("MEDIA_VIDEO_STAGE streamon_exit ret=%d errno=%d\n",
+                               video_ret, errno);
+                        fflush(stdout);
                         if (video_ret < 0) {
                             printf("MEDIA_VIDEO_FRAME_FAIL stage=streamon errno=%d\n",
                                    errno);
@@ -973,7 +1601,12 @@ static void cmd_media_probe(int argc, char** argv)
                             memset(&pfd, 0, sizeof(pfd));
                             pfd.fd = video_fd;
                             pfd.events = POLLIN;
+                            printf("MEDIA_VIDEO_STAGE poll_enter\n");
+                            fflush(stdout);
                             video_ret = poll(&pfd, 1, 5000);
+                            printf("MEDIA_VIDEO_STAGE poll_exit ret=%d revents=0x%x errno=%d\n",
+                                   video_ret, pfd.revents, errno);
+                            fflush(stdout);
                             if (video_ret <= 0) {
                                 printf("MEDIA_VIDEO_FRAME_FAIL stage=poll ret=%d revents=0x%x errno=%d\n",
                                        video_ret, pfd.revents, errno);
@@ -981,8 +1614,13 @@ static void cmd_media_probe(int argc, char** argv)
                                 memset(&buf, 0, sizeof(buf));
                                 buf.type = type;
                                 buf.memory = V4L2_MEMORY_USERPTR;
+                                printf("MEDIA_VIDEO_STAGE dqbuf_enter\n");
+                                fflush(stdout);
                                 video_ret = ioctl(video_fd, VIDIOC_DQBUF,
                                                   (uintptr_t)&buf);
+                                printf("MEDIA_VIDEO_STAGE dqbuf_exit ret=%d bytes=%u errno=%d\n",
+                                       video_ret, (unsigned int)buf.bytesused, errno);
+                                fflush(stdout);
                                 if (video_ret < 0) {
                                     printf("MEDIA_VIDEO_FRAME_FAIL stage=dqbuf errno=%d\n",
                                            errno);
@@ -2468,6 +3106,14 @@ static void* cli_thread(void* arg)
             cmd_voice_test_asr(argc, argv);
         else if (strcmp(cmd, "media_probe") == 0)
             cmd_media_probe(argc, argv);
+        else if (strcmp(cmd, "audio_stream") == 0)
+            cmd_audio_stream(argc, argv);
+        else if (strcmp(cmd, "wake_loop") == 0)
+            cmd_wake_loop(argc, argv);
+        else if (strcmp(cmd, "wake_rec") == 0)
+            cmd_wake_rec(argc, argv);
+        else if (strcmp(cmd, "kws_dump") == 0)
+            cmd_kws_dump(argc, argv);
         else if (strcmp(cmd, "set_media") == 0)
             cmd_set_media(argc, argv);
         else if (strcmp(cmd, "vision") == 0)
@@ -2558,21 +3204,7 @@ int nsh_commands_init(void)
     return OK;
 }
 
-/* [WP-C FIX] CLI 线程栈固定放 DRAM（.bss），避免 cache-suspend 窗口内
- * PSRAM 栈不可达导致的随机挂死（XIP 模型读 / littlefs 写期间）。 */
-static uint8_t g_cli_stack[AGENT_CLI_STACK] __attribute__((aligned(16)));
-
 int nsh_commands_start(void)
 {
-    pthread_attr_t attr;
-    pthread_t tid;
-    pthread_attr_init(&attr);
-    pthread_attr_setstack(&attr, g_cli_stack, sizeof(g_cli_stack));
-    int rc = pthread_create(&tid, &attr, cli_thread, NULL);
-    pthread_attr_destroy(&attr);
-    if (rc != 0) {
-        syslog(LOG_ERR, "[nsh] cli thread create failed rc=%d\n", rc);
-        return -1;
-    }
-    return 0;
+    return agent_task_create(cli_thread, "agent_cli", AGENT_CLI_STACK, NULL, AGENT_CLI_PRIO);
 }

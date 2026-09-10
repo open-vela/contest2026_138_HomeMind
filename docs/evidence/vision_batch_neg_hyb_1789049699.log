@@ -1,0 +1,14 @@
+label=neg_hyb n=10 bin=0764e58f_or_later
+run=1 person=0.0 latency=0.0 result=none
+run=2 person=0.0 latency=0.0 result=none
+run=3 person=0.0 latency=0.0 result=none
+run=4 person=0.0 latency=0.0 result=none
+run=5 person=0.0 latency=0.0 result=none
+run=6 person=0.0 latency=0.0 result=none
+run=7 person=0.0 latency=0.0 result=none
+run=8 person=0.0 latency=0.0 result=none
+run=9 person=0.0 latency=0.0 result=none
+run=10 person=0.0 latency=0.0 result=none
+score_min=0.000 max=0.000 mean=0.000
+lat_p50=0.0 p95=0.0
+ok=10 fail=0 detected=0 none=10
