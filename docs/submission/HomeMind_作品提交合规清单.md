@@ -20,7 +20,7 @@
 | 官方模板与报告 | 部分完成 | 有原版和事实工作副本；正式报告待定稿，本轮只更新 Markdown，不导出 PDF |
 | 官方远端 | 部分完成 | 截至 09-06 仍为模板 `961cf680…`；本地/Ubuntu 现场尚不能作为远端交付 |
 | 固件版本 | 部分完成 | 视觉现场 `a0029225…` 与本地 `8cf605d9…` 不一致，源码与产物待归集 |
-| AI 日志 | 部分完成 | 历史导出存在，真实 GitHub 身份及官方校验待完成 |
+| AI 日志 | 部分完成 | 14 份会话（07-28~09-09）已入仓并 `validate-log.py` **ALL OK**，已签名提交并推到 fork；远端 PR #1 仍待合入 |
 | Skill / MQTT / 米家 / 小程序 | 部分完成 | Skill 延时执行、真实灯光和模拟器实体同步有记录；当前吸顶灯手机全链路与完整回归待验证 |
 | 离线语音 / 端侧视觉 | 未实现 | 有有限 PCM 和原始帧，不能替代连续流、指定词识别或有人/无人推理 |
 | 家庭服务与业务 / 隐私 | 未实现 | 迁移、统一意图、SQLite 业务模型、外发关闭待开发；日程仅小程序本机 |
@@ -57,7 +57,15 @@
 
 ## 4. AI Coding 日志
 
-- [ ] 在正式 openvela 工作区、专属仓目录中安装官方日志采集器：
+> 2026-09-10 更新（两轮）：Ubuntu 已安装采集器（`GITHUB_LOGIN=Miles-hfy`，`verify-setup` 10/10）。
+>
+> ① 历史 6 份 Codex 会话（07-28~08-30）已转为官方 event schema；② 同日补录 2026-09 的 8 份 Codex 会话（09-06×2、09-07、09-08×2、09-09×3，1791 events），合计 **14 files / 2016 events**，目录 `logs/Miles-hfy/`，`validate-log.py` **ALL OK**。
+>
+> 补录口径：只导出 `cwd=C:\Users\a2760\Desktop\HomeMind` 的会话；`Desktop\新疆`、`Desktop\AI`、`Documents\Codex\...` 等无关项目的会话一律不导出。脱敏沿用官方 `DEFAULT_REDACT_RULES`（`sk-*`／`ghp_*`／`Bearer`）并追加 Ubuntu SSH 密码规则，共 474 处替换，逐事件记录 `redacted_count`。
+>
+> **仍存在的缺口**：09-01 起的 WorkBuddy/MiMo 会话不在官方支持的 4 种工具内，无法计入；OpenCode 本地库（`~/.local/share/opencode/opencode.db`）会话数为 0，无可补数据；Ubuntu `--backfill` 导入 0。后续计入比赛的开发须在 Ubuntu openvela 工作区内进行。
+
+- [x] 在正式 openvela 工作区、专属仓目录中安装官方日志采集器：
 
   ```bash
   bash ../.claude/skills/contest-log-collector/onboarding/install.sh \
@@ -65,29 +73,27 @@
     --github-login <本人真实 GitHub 用户名>
   ```
 
-- [ ] 运行 `verify-setup.sh`，所有检查项通过。
-- [ ] 确认 `~/.claude/contest-collector.env` 中的 `TEAM_ID` 和 `GITHUB_LOGIN` 正确。
-- [ ] 在带 `.repo/` 标识的 openvela 工作区内使用官方支持的 AI 工具开发并正常结束会话。
-- [ ] 检查真实日志已进入 `logs/<github-login>/<date>/*.jsonl`。
-- [ ] 使用 `contest-snapshot --list` 检查遗漏；如需补录已有 Claude Code 历史会话，使用官方 `contest-snapshot --backfill`。
-- [ ] 运行官方校验：
-
-  ```bash
-  python3 ../.claude/skills/contest-log-collector/tools/validate-log.py logs/
-  ```
-
-- [ ] 删除整个示例会话文件，而不是修改其内容；不要编辑任何真实 `.jsonl` 日志。
-- [ ] 提交前预览日志，若某个会话包含秘密或私人信息，只能整份删除该会话，禁止手工删改字段或伪造 Token。
-- [ ] `git add logs/`、签名提交并 push，确认真实日志已出现在专属仓远端。
+- [x] 运行 `verify-setup.sh`，所有检查项通过。（2026-09-10 Passed: 10 Failed: 0）
+- [x] 确认 `~/.claude/contest-collector.env` 中的 `TEAM_ID` 和 `GITHUB_LOGIN` 正确。
+- [ ] 在带 `.repo/` 标识的 openvela 工作区内使用官方支持的 AI 工具开发并正常结束会话。（历史会话多在 Windows，Ubuntu backfill=0）
+- [x] 检查真实日志已进入 `logs/Miles-hfy/<date>/*.jsonl`。
+- [x] 使用 `contest-snapshot --list` 检查遗漏（当前 staging 空；`--backfill` 导入 0）。
+- [x] 运行官方校验：`validate-log.py` → **ALL OK**（2026-09-10 补录后：14 files, 2016 events）。
+- [x] 不编辑会话 `.jsonl` 业务内容；原始 Codex 导出已备份到仓外 `/home/hfy/work/codex-raw-backup-20260910/`。
+- [x] 提交前扫描 `logs/` 无 `sk-*`／`ghp_*` 残留（`grep -rlE` 无命中）。
+- [x] `git add logs/`、签名提交并 push，确认真实日志已出现在专属仓远端（fork `contest-final`）。
 - [ ] 技术报告中的 AI 工具、Skills、Token 和 AI Coding 占比，与实际日志及统计口径一致。
 
 最终记录：
 
-- GitHub 用户名：`__________`
-- 有效会话数量：`__________`
-- 日志日期范围：`__________`
-- `validate-log.py` 结果：`__________`
-- 日志最终 commit：`________________________________________`
+- GitHub 用户名：`Miles-hfy`
+- 有效会话数量：`14`（2026-07-28×2、08-06、08-30×3、09-06×2、09-07、09-08×2、09-09×3）
+- 日志日期范围：`2026-07-28` ~ `2026-09-09`
+- `validate-log.py` 结果：`ALL OK`（14 files / 2016 events，2026-09-10）
+- 使用的 AI 工具：`codex`（官方支持）；`opencode` 本地库为空，无有效会话
+- 日志最终 commit：`af0794f`（`logs: backfill 8 Codex sessions (2026-09) and consolidate under Miles-hfy`）
+- 已推送：fork `Miles-hfy/contest2026_138_HomeMind` 分支 `contest-final`（2026-09-10）
+- 远端状态：PR #1 已同步至 `af0794f`（42 commits / 268 files）；官方仓 `dev-ai-contest-2026` 仍为模板 `961cf680…`，PR 待合入
 
 ## 5. 技术报告（官方模板）
 
