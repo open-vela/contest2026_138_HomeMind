@@ -140,6 +140,7 @@ endif
 ifeq ($(CONFIG_TFLITEMICRO),y)
 CXXSRCS += src/vision/person_detect.cc
 CXXSRCS += src/vision/person_detect_model_data.cc
+CXXSRCS += src/vision/kws_model_data.cc
 CXXFLAGS += ${INCDIR_PREFIX}$(CURDIR)/src
 CXXFLAGS += ${INCDIR_PREFIX}$(APPDIR)/mlearning/tflite-micro/tflite-micro
 CXXFLAGS += ${INCDIR_PREFIX}$(APPDIR)/math/gemmlowp/gemmlowp

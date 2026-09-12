@@ -1,6 +1,6 @@
 # HomeMind 最终材料证据索引
 
-> 更新：2026-09-07；项目事实截止：2026-09-06。唯一当前摘要见 [STATUS](../../STATUS.md)。记录存在不等于对应最新源码/产物已归集；缺少版本时明确保留缺口。
+> 更新：2026-09-12；项目事实截止：2026-09-12。唯一当前摘要见 [STATUS](../../STATUS.md)。记录存在不等于对应最新源码/产物已归集；缺少版本时明确保留缺口。
 
 | 声明 / 日期 | 状态 | 可引用证据 | 版本与适用边界 |
 | --- | --- | --- | --- |
@@ -8,12 +8,17 @@
 | Skill 原文安装、15 秒延时 LED；09-02 | 已验收 | [运行日志](../../logs/hardware-2026-09-02-skill-runtime.log)、[Skill 源码](../../app/homemind/skills/home_security.md) | BIN `d045e2c7…`（完整哈希见 STATUS）；真实感知触发未接入 |
 | MQTT→网关→串口→LED；09-02 | 已验收 | [双向闭环](../evidence/2026-09-02_mqtt_gateway_loop.txt) | 限记录部署版本，板端原生 MQTT 与迁移后链路待验证 |
 | 真实帧与有限 640 字节 PCM；09-03 | 已验收 | [媒体探针](../evidence/2026-09-03_media_pause.txt) | BIN `8cf605d9…`，完整哈希见 STATUS；不证明连续流、KWS 或端侧推理 |
+| 摄像头冻结根因与恢复；09-10 | 已验收 | [冻结根因](../evidence/2026-09-10_camera_freeze_root_cause.md) | CLI 64KB DRAM 栈导致；回退后 `media_probe` 2/2 出帧；BIN `ffe989ec…` |
+| 端侧混合存在检测；09-10 | 部分完成 | [混合检测](../evidence/2026-09-10_vision_hybrid_presence.md) | 有目标 9/10 DETECTED（mean 0.474）；遮挡 10/10 none；非完整人体检测器，20 正/20 负未达标 |
+| I2S 连续 PCM；09-10 | 已验收 | [连续采集](../evidence/2026-09-10_i2s_continuous_pcm.md) | `audio_stream 3` → 96000/96000B PASS；poll 环形语义 + usleep 配方 |
+| 能量 VAD 唤醒 + LED；09-10 | 已验收 | [能量唤醒](../evidence/2026-09-10_wake_loop_energy_vad.md) | thr=1500 hold=3：说话 8s→4 WAKE；静音→0；**非**指定词识别 |
+| KWS「你好，openvela」；09-12 | 未实现 | [诚实状态](../evidence/2026-09-12_kws_honest_status.md) | 链路通但判别不达标；手机/板载域差异；**已知缺口** |
 | 公网视觉实验；09-06 | 部分完成 | [现场验收](../evidence/2026-09-06_camera_vision_e2e.md) | 记录 BIN `a0029225…` / ELF `8ffea523…`；源码与产物待归集；原始图像外发，不是隐私模式成果 |
 | 米家真实灯光 MQTT/HA 控制；09-06 | 已验收 | [设备验收](../evidence/2026-09-06_mihome_device_accept.md)、[网关部署](../evidence/2026-09-06_mihome_gateway_deploy.md) | 旧阳台开关及记录部署版本；最终源码提交映射待归集 |
 | 模拟器登录、真实灯光、实体同步；09-06 | 已验收 | [物理闭环](../evidence/2026-09-06_miniprogram_mihome_physical.md)、[实体同步](../evidence/2026-09-06_mihome_entity_sync.md) | 限模拟器/阳台设备记录；客户端与服务端最终提交映射待归集，不代表手机真机通过 |
 | 多功能房吸顶灯；09-06 | 部分完成 | [设备切换](../evidence/2026-09-06_mihome_ceiling_light_swap.md) | 直连开/关回读；当前小程序全链路、开关各 10 次待验证 |
 | 网关测试 9/9；本轮用户核查 | 已验收 | [STATUS 核查来源说明](../../STATUS.md) | 用户提供的软件测试结果；独立运行日志/源码 revision 待归集，本次未重跑；不作为硬件证据 |
-| 端侧有人/无人、指定词与本地语音命令 | 未实现 | [冲刺计划](../HomeMind_比赛冲刺计划_2026-08-30_至_2026-09-20.md) | 无模型验收版本，计划入口不是完成证据 |
+| 端侧有人/无人（混合存在检测）、指定词与本地语音命令 | 部分完成 / 未实现 | [混合检测](../evidence/2026-09-10_vision_hybrid_presence.md)、[能量唤醒](../evidence/2026-09-10_wake_loop_energy_vad.md)、[KWS 缺口](../evidence/2026-09-12_kws_honest_status.md) | 视觉：混合检测 9/10·10/10 遮挡，非完整人体检测；语音：连续 PCM + 能量 VAD 已通；**指定词 KWS 未实现** |
 | 家庭私有服务、语义、事件/待办/资产 | 未实现 | [家庭服务计划](../C1.0-腾讯云资产与后端计划.md) | 小程序日程仅本机；目标家庭模型与隐私模式无验收版本 |
 | 报告/视频/照片/提交 | 部分完成 | [提交清单](HomeMind_作品提交合规清单.md)、[视频脚本](HomeMind_视频脚本_事实版.md)、[AI 日志目录](../../logs/) | 有模板与脚本；正式材料、真实身份日志校验与回执待补 |
 | 官方远端；截至 09-06 核查 | 部分完成 | [提交记录栏](HomeMind_作品提交合规清单.md) | 模板 `961cf680946773cd4c1f41b29c425de892bd9a69`，非最终提交；本地与现场成果不等于远端合入 |

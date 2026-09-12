@@ -1,27 +1,36 @@
-﻿# HomeMind 当前状态
+# HomeMind 当前状态
 
-> 文档更新：2026-09-09（摄像头/网络探针与家庭服务状态收口）；项目事实截止：2026-09-09。唯一当前摘要为本节；下方历史记录保留原文，其过期结论不作为当前任务。
+> 文档更新：2026-09-12（摄像头恢复、混合存在检测、连续 PCM、能量唤醒、KWS 缺口收口）；项目事实截止：2026-09-12。唯一当前摘要为本节；下方历史记录保留原文，其过期结论不作为当前任务。
 
 ## 唯一当前摘要
 
-**部分完成：截至 2026-09-09，项目已有联网控制原型和家庭侧 API、SQLite、MQTT、网关、relay 闭环；严格私有化、端侧人员检测、离线感知以及小程序真机/跨端验收仍未完成。修改文档不代表原方案已兑现。** 当前主线为 ESP32-S3-EYE + OpenVela/ai_agent 家庭感知中枢，重点是摄像头访问冻结定位、连续音频、端侧推理、云端入口收口与业务闭环；模型初始化资源清理与越界调试读取已通过单文件交叉编译，并已纳入一次完整构建/烧录，端侧推理仍未验收。
+**部分完成：截至 2026-09-12，项目已有联网控制原型、家庭侧 API/SQLite/MQTT/网关/relay 闭环、摄像头采集恢复、端侧混合存在检测、连续 PCM 与能量 VAD 唤醒。真关键词「你好，openvela」KWS 未达标（已知缺口）；严格隐私模式、小程序真机/跨端验收、正式提交材料与远端合入仍未完成。修改文档不代表原方案已兑现。**
 
-**交接暂停点（2026-09-09）**：正式 `scripts/build.sh build`/刷写产物 BIN `d2ef3ee7…`、ELF `8b87542f…` 已记录；`media_probe` 仍在 `capture_open()` 的 `cmng->mutex` 等待处失去串口/网络响应。有界锁临时实验已回退，默认源码仍为阻塞锁并保留阶段标记。服务已恢复 active，稳定串口为 `/dev/homemind-esp32`。WORKBUDDY 接手前请先读[摄像头交接记录](docs/evidence/2026-09-09_camera_handoff.md)和[最新探针证据](docs/evidence/2026-09-09_camera_network_probe.md)。
+当前主线为 ESP32-S3-EYE + OpenVela/ai_agent 家庭感知中枢。摄像头冻结根因已定位并修复（CLI 64KB DRAM 栈），`media_probe` 与 `vision local` 可用；混合存在检测 9/10·10/10 遮挡；`audio_stream` 连续 PCM 3s PASS；`wake_loop` 能量 VAD + LED 已验收。
 
 | 模块 | 状态 | 已有事实与证据 | 剩余差距 |
 | --- | --- | --- | --- |
 | OpenVela 基础固件 | 部分完成 | 联网、MiMo、LED/LCD、持久化有实机记录；见[稳定性日志](logs/hardware-2026-09-01-stability-ok-full.log)及历史记录 | 最新版本统一归档、完整回归和干净构建 |
 | Skill 主动执行 | 部分完成 | 真实原文安装与延时 LED 执行[日志](logs/hardware-2026-09-02-skill-runtime.log) | 接入真实感知事件 |
 | 米家控制 | 部分完成 | MQTT→家庭网关→HA→真实灯光[验收](docs/evidence/2026-09-06_mihome_device_accept.md)；[吸顶灯直连切换记录](docs/evidence/2026-09-06_mihome_ceiling_light_swap.md) | 当前多功能房吸顶灯小程序全链路回归，开关各 10 次 |
-| 小程序 | 部分完成 | 模拟器登录、控制、[物理动作](docs/evidence/2026-09-06_miniprogram_mihome_physical.md)及[实体同步](docs/evidence/2026-09-06_mihome_entity_sync.md)有记录；[09-08 真机验收记录](docs/evidence/2026-09-08_miniprogram_device_accept.md)仍是未执行模板，云端 health/WSS/TLS 只读基线通过 | 手机真机登录、绑定、状态回读、重连、弱网、权限及小程序跨端日程/资产同步 |
-| 摄像头采集与公网实验 | 部分完成 | 原始帧、腾讯云转码→MiMo [现场记录](docs/evidence/2026-09-06_camera_vision_e2e.md)；视觉源码/产物已归集；Ubuntu 官方仓 `firmware/ai_agent_overlay/src/vision/person_detect.cc` 在 HEAD `aaefdcb` 被跟踪；[09-09 摄像头/网络探针](docs/evidence/2026-09-09_camera_network_probe.md)记录正式 BIN `d2ef3ee7…`、API/gateway/relay active、API health ok 及板端网络/串口现象 | 正式隐私模式须关闭原始图像外发；摄像头访问冻结仍需定位并修复 |
-| 端侧有人/无人推理 | 未实现 | 09-09 细粒度探针在 `capture_open()` 输出 `[CAM-OPEN] mutex_enter` 后等待管理锁，随后网络/串口无响应；原始取帧不等于推理，初始化修复已随诊断 BIN 烧录但未执行 TFLM 推理 | 先定位 capture manager 锁持有者并修复 open/close 生命周期，再用真实帧驱动端侧模型与存在事件 |
-| 麦克风 | 部分完成 | [有限 640 字节 PCM](docs/evidence/2026-09-03_media_pause.txt)；09-07 实机复核通过，根因已[记录](docs/evidence/2026-09-07_pcm_multibuffer_diag.md) | 多缓冲/重入队未修复（保留阻塞） |
-| 离线唤醒与本地语音命令 | 未实现 | 尚无指定词模型验收 | “你好，openvela”及一个 LED 语音命令，断公网、断 Wi-Fi 分测 |
+| 小程序 | 部分完成 | 模拟器登录、控制、[物理动作](docs/evidence/2026-09-06_miniprogram_mihome_physical.md)及[实体同步](docs/evidence/2026-09-06_mihome_entity_sync.md)有记录 | 手机真机登录、绑定、状态回读、重连、弱网、权限及跨端同步 |
+| 摄像头采集 | 已验收（恢复） | 冻结根因：CLI 64KB DRAM 栈；回退后 `media_probe` 2/2 出帧；[根因](docs/evidence/2026-09-10_camera_freeze_root_cause.md) | 诊断打印清理；4 小时长稳 |
+| 端侧存在检测 | 部分完成 | 混合检测（肤色+边缘+运动+TFLM）：有目标 9/10 DETECTED（mean 0.474）；遮挡 10/10 none；[证据](docs/evidence/2026-09-10_vision_hybrid_presence.md) | 非完整人体检测器；20 正/20 负统计未达标 |
+| 连续音频 | 已验收 | `audio_stream 3` → 96000/96000B PASS；[配方](docs/evidence/2026-09-10_i2s_continuous_pcm.md) | I2S 多缓冲无 usleep 仍不可靠 |
+| 离线唤醒（能量 VAD） | 已验收 | `wake_loop`：说话 8s→4 WAKE+LED；静音→0；[证据](docs/evidence/2026-09-10_wake_loop_energy_vad.md) | 非指定词识别 |
+| 离线唤醒（KWS 指定词） | **未实现（已知缺口）** | 链路通（`wake_kws`）但手机/板载域差异导致判别不达标；[诚实状态](docs/evidence/2026-09-12_kws_honest_status.md) | 需统一采样≥20 条/类 + 板上标定，或公开中文 KWS 模型 |
 | 家庭语义任务编排 | 未实现 | 板端问答与工具调用已可用 | 家庭意图→必要文本 MiMo→受校验任务链路 |
-| 日程、事件、资产 | 部分完成 | 家庭 FastAPI + SQLite 已落地 `/v1/intents`、`/v1/events`、`/v1/tasks`、`/v1/assets`，意图白名单、感知事件、待办提醒/状态和资产查询已有[09-07 验收](docs/evidence/2026-09-07_home_backend_e2e.md)；小程序日程仍是本机存储 | 小程序跨端同步未验收；睡前场景、跨端/重启结果与设备结果分记仍待补证据 |
-| 严格私有化 | 未实现 | 家庭侧 API、SQLite、出站 relay 已运行；历史公网视觉实验仍会上传原始图像，云端入口切换与业务写入停用尚未完成 | 正式模式关闭原始音视频外发、云端入口/日志/数据库边界和出站验收 |
-| 最终提交 | 部分完成 | 有报告模板、视频脚本和本地代码；09-09 已有记录显示 fork 推送 `7abeec5`、PR #1 已开（该记录不是本轮远端实时查询） | CLA/Actions 检查与官方主分支合入、正式材料、真实 AI 日志校验、视频/照片和回执 |
+| 日程、事件、资产 | 部分完成 | 家庭 FastAPI + SQLite `/v1/*` 已有[09-07 验收](docs/evidence/2026-09-07_home_backend_e2e.md)；小程序日程仍是本机 | 跨端同步、睡前场景分记 |
+| 严格私有化 | 未实现 | 家庭侧 API/SQLite/relay 已运行；历史公网视觉仍上传原始图像 | 正式模式关闭外发、云端边界验收 |
+| 最终提交 | 部分完成 | 报告模板、视频脚本、本地代码；AI 日志 14 files/2016 events ALL OK | CLA/PR 合入、正式材料、视频/照片、回执 |
+
+### S1 版本归集（2026-09-12）
+
+- Ubuntu 权威现场仓：`/home/hfy/work/openvela-clean-20260830/contest2026_138_HomeMind`，分支 `contest-final`。
+- 已归集未入库：端侧 `wake_kws`/KWS 线性模型、`person_detect` 源码与模型、2026-09-12 构建产物（BIN `9cfe649e…` / ELF `b2ffef6c…`）、部署清单与 KWS 诚实状态证据。
+- 已把现场部署版家庭网关双 MQTT（`LOCAL_MQTT_*`）与 API `MQTT_USERNAME`/`MQTT_PASSWORD` 同步进仓库；保留仓库侧 `RELAY_MODE`、`DEMO_MODE`、mihome 白名单能力，不以旧部署简化版覆盖。
+- `SOURCE_SNAPSHOT.json` 已按当前 overlay 重新生成。Windows 主副本落后于本现场版本，不得用 Windows 旧树覆盖现场。
+- 官方 PR #1 仍 open；合入由队伍负责人浏览器完成 CLA + Rebase，不以 PR 存在冒充官方分支已合入。
 
 ### 证据与版本边界
 

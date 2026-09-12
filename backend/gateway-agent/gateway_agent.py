@@ -61,6 +61,12 @@ TOPIC_ACK = f"device/{DEVICE_ID}/ack"
 TOPIC_STATUS = f"device/{DEVICE_ID}/status"
 TOPIC_SPEAK = f"device/{DEVICE_ID}/speak"
 
+# ── 本地 MQTT（家庭侧迁移，工作包 B；配置 LOCAL_MQTT_HOST 则启用双连接）──
+LOCAL_MQTT_HOST = os.getenv("LOCAL_MQTT_HOST", "")
+LOCAL_MQTT_PORT = int(os.getenv("LOCAL_MQTT_PORT", "1883"))
+LOCAL_MQTT_USER = os.getenv("LOCAL_MQTT_USER", "home-gateway")
+LOCAL_MQTT_PASS = os.getenv("LOCAL_MQTT_PASS", "")
+
 PROMPT = os.getenv("DEVICE_PROMPT", "vela>")
 ENTER_CMD = "ai_agent"  # 从 nsh> 进入 vela> 的命令
 
@@ -151,12 +157,8 @@ def main():
     else:
         client.tls_set(cert_reqs=mqtt.ssl.CERT_REQUIRED)  # 用系统 CA（Let's Encrypt）
 
-    backoff = 2
-
     def on_connect(cli, userdata, flags, rc):
-        nonlocal backoff
         if rc == 0:
-            backoff = 2
             cli.subscribe(TOPIC_CMD)
             cli.subscribe(TOPIC_SPEAK)
             logger.info("已连接 MQTT 并订阅 %s、%s", TOPIC_CMD, TOPIC_SPEAK)
@@ -264,14 +266,31 @@ def main():
     client.on_connect = on_connect
     client.on_message = on_message
 
-    while True:
-        try:
-            client.connect(API_HOST, API_PORT, KEEPALIVE)
-            client.loop_forever(retry_first_connection=True)
-        except Exception as e:
-            logger.error("MQTT 循环异常：%s，%ss 后重连", e, backoff)
-            time.sleep(backoff)
-            backoff = min(backoff * 2, 60)
+    def _run_loop(cli, host, port):
+        """独立线程跑一个 MQTT 连接（云端/本地各自维护重连退避）。"""
+        _backoff = 2
+        while True:
+            try:
+                cli.connect(host, port, KEEPALIVE)
+                cli.loop_forever(retry_first_connection=True)
+            except Exception as e:
+                logger.error("MQTT 循环异常（%s:%s）：%s，%ss 后重连", host, port, e, _backoff)
+                time.sleep(_backoff)
+                _backoff = min(_backoff * 2, 60)
+
+    # 本地 broker（家庭侧，明文 1883 + 密码认证）：配置即启用
+    if LOCAL_MQTT_HOST:
+        local = mqtt.Client()
+        local.username_pw_set(LOCAL_MQTT_USER, LOCAL_MQTT_PASS)
+        local.on_connect = on_connect
+        local.on_message = on_message
+        threading.Thread(
+            target=_run_loop, args=(local, LOCAL_MQTT_HOST, LOCAL_MQTT_PORT),
+            daemon=True).start()
+        logger.info("本地 MQTT 已启动：%s:%s（用户 %s）",
+                    LOCAL_MQTT_HOST, LOCAL_MQTT_PORT, LOCAL_MQTT_USER)
+
+    _run_loop(client, API_HOST, API_PORT)
 
 
 if __name__ == "__main__":
