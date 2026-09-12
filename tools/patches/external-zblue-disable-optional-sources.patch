@@ -1,0 +1,15 @@
+diff --git a/zblue/Kconfig b/zblue/Kconfig
+index 297096d..62925b4 100644
+--- a/zblue/Kconfig
++++ b/zblue/Kconfig
+@@ -18,9 +18,9 @@ endchoice
+ 
+ if ZEPHYR_REPO_DEFAULT
+-osource "$APPSDIR/external/zblue/Kconfig.default"
++# osource "$APPSDIR/external/zblue/Kconfig.default"
+ endif #ZEPHYR_REPO_DEFAULT
+ 
+ if ZEPHYR_REPO_3_0_1
+-osource "$APPSDIR/external/zblue/Kconfig.3_0_1"
++# osource "$APPSDIR/external/zblue/Kconfig.3_0_1"
+ endif #ZEPHYR_REPO_3_0_1

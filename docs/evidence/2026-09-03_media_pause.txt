@@ -1,0 +1,76 @@
+HomeMind media verification record — 2026-09-03
+
+Scope
+- Local repository and the Ubuntu clean build workspace only.
+- No remote Git push was performed. The corrected media image was built in the
+  Ubuntu clean workspace, fetched locally, and flashed to the real board.
+- No Wi-Fi credential, SSH password, MiMo key, Xiaomi credential, or cloud token is
+  stored in this evidence file.
+
+Prior pre-fix observation
+MEDIA_VIDEO_FRAME bytes=153600 checksum=2938631511 sequence=0
+MEDIA_AUDIO_STAGE config
+MEDIA_AUDIO_STAGE alloc
+MEDIA_AUDIO_PCM_FAIL stage=alloc ret=0 errno=0
+MEDIA_PROBE_DONE
+
+Interpretation
+- The camera path produced a real 320x240 RGB565 frame (153600 bytes).
+- The earlier audio allocation result was caused by the probe not first querying
+  AUDIOIOC_GETBUFFERINFO; it is retained here as historical failure evidence.
+
+2026-09-03 continuation: build, flash, and real-board probes
+- The corrected deployment completed successfully. The latest artifact hashes were:
+  - `artifacts/nuttx.bin`: `8cf605d958ddf99731c47ae170572f8da581516a2ad3b7572f6f1efe66aa0172`
+  - `artifacts/nuttx.elf`: `a59d163c13a75cf6749a204788154b7bab8cc3d21f95ba80c7bbf00abb0cdf40`
+- Flashing the real ESP32-S3-EYE completed with esptool `Hash of data verified` and
+  a hard reset. The board was then probed twice, with the gateway process paused by
+  the existing local helper and restored by systemd afterwards.
+
+Probe 1
+MEDIA_VIDEO_FRAME bytes=153600 checksum=2086429781 sequence=0
+MEDIA_AUDIO_STAGE config
+MEDIA_AUDIO_STAGE info nbuffers=4 buffer=4095 ret=0
+MEDIA_AUDIO_STAGE alloc count=1
+MEDIA_AUDIO_STAGE enqueue count=1
+MEDIA_AUDIO_STAGE start
+MEDIA_AUDIO_STAGE poll
+MEDIA_AUDIO_PCM bytes=640 buffer=0 checksum=1842875589
+MEDIA_PROBE_DONE
+
+Probe 2
+MEDIA_VIDEO_FRAME bytes=153600 checksum=1335260587 sequence=0
+MEDIA_AUDIO_STAGE config
+MEDIA_AUDIO_STAGE info nbuffers=4 buffer=4095 ret=0
+MEDIA_AUDIO_STAGE alloc count=1
+MEDIA_AUDIO_STAGE enqueue count=1
+MEDIA_AUDIO_STAGE start
+MEDIA_AUDIO_STAGE poll
+MEDIA_AUDIO_PCM bytes=640 buffer=0 checksum=3132403461
+MEDIA_PROBE_DONE
+
+Re-arm experiment (not accepted as continuous streaming)
+MEDIA_AUDIO_STAGE poll cycles=4
+MEDIA_AUDIO_PCM cycle=0 bytes=640 buffer=0 checksum=2474627525
+MEDIA_AUDIO_STAGE reenqueue cycle=1 ret=0
+MEDIA_AUDIO_PCM_FAIL stage=drain cycle=1 ret=1 revents=0x9 errno=0
+MEDIA_PROBE_DONE
+
+Interpretation
+- Two fresh real-board runs verify raw OV2640 RGB565 capture and finite I2S0 RX
+  PCM transfer. The probe uses one 640-byte, 4-byte-aligned buffer and only treats
+  a completed buffer as safe to release.
+- A prior four-buffer experiment and the same-APB re-arm experiment each
+  produced one completed buffer but did not drain the remaining/next buffer
+  reliably. Continuous multi-buffer streaming, voice ASR, and offline
+  wake-word detection therefore remain unverified.
+- The hardware pin assignment is BCLK/WS/DIN=41/42/2; the build enables I2S0 RX
+  master mode and 16 kHz/16-bit PCM. Raw camera capture is not camera inference.
+
+Remaining gates
+- Offline KWS model/runtime and the required wake phrase remain unfinished.
+- Real Xiaomi device control, authenticated public API/WSS business flow, WeChat
+  developer-tool clean build and real-device test, final video/photos, final
+  DOCX/PDF, and remote repository submission remain unfinished. The public
+  HTTPS/OpenAPI and unauthenticated/auth-gate probes are recorded separately;
+  they do not substitute for a real WeChat token and WSS exchange.

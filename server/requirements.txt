@@ -1,0 +1,24 @@
+﻿# FastAPI 服务依赖
+fastapi==0.104.1
+uvicorn==0.24.0
+pydantic==2.5.0
+python-multipart==0.0.6
+
+# MQTT 客户端
+paho-mqtt==1.6.1
+
+# 数据库
+sqlalchemy==2.0.23
+alembic==1.13.0
+
+# 工具库
+python-dotenv==1.0.0
+httpx==0.25.2
+websockets==12.0
+
+# AI 相关
+openai==1.6.1
+
+# 测试
+pytest==7.4.3
+pytest-asyncio==0.23.2

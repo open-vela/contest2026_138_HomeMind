@@ -1,0 +1,126 @@
+/* app.wxss - 全局样式 */
+
+page {
+  background-color: #F5F5F5;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 28rpx;
+  color: #333333;
+  line-height: 1.5;
+}
+
+.container {
+  padding: 20rpx;
+}
+
+.card {
+  background-color: #ffffff;
+  border-radius: 16rpx;
+  padding: 24rpx;
+  margin-bottom: 20rpx;
+  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.05);
+}
+
+.card-title {
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #333333;
+  margin-bottom: 16rpx;
+}
+
+.card-content {
+  font-size: 28rpx;
+  color: #666666;
+}
+
+.btn-primary {
+  background-color: #4A90E2;
+  color: #ffffff;
+  border-radius: 12rpx;
+  padding: 20rpx 40rpx;
+  font-size: 28rpx;
+  text-align: center;
+}
+
+.btn-primary:active {
+  background-color: #357ABD;
+}
+
+.btn-secondary {
+  background-color: #F0F0F0;
+  color: #333333;
+  border-radius: 12rpx;
+  padding: 20rpx 40rpx;
+  font-size: 28rpx;
+  text-align: center;
+}
+
+.btn-secondary:active {
+  background-color: #E0E0E0;
+}
+
+.status-online {
+  color: #52C41A;
+}
+
+.status-offline {
+  color: #FF4D4F;
+}
+
+.status-warning {
+  color: #FAAD14;
+}
+
+.flex-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+.flex-column {
+  display: flex;
+  flex-direction: column;
+}
+
+.flex-1 {
+  flex: 1;
+}
+
+.text-center {
+  text-align: center;
+}
+
+.text-right {
+  text-align: right;
+}
+
+.mt-10 {
+  margin-top: 10rpx;
+}
+
+.mt-20 {
+  margin-top: 20rpx;
+}
+
+.mb-10 {
+  margin-bottom: 10rpx;
+}
+
+.mb-20 {
+  margin-bottom: 20rpx;
+}
+
+.ml-10 {
+  margin-left: 10rpx;
+}
+
+.mr-10 {
+  margin-right: 10rpx;
+}
+
+.p-10 {
+  padding: 10rpx;
+}
+
+.p-20 {
+  padding: 20rpx;
+}

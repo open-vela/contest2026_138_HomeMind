@@ -1,0 +1,50 @@
+diff --git a/src/infra/network_manager.c b/src/infra/network_manager.c
+--- a/src/infra/network_manager.c
++++ b/src/infra/network_manager.c
+@@ -833,41 +833,19 @@ int network_wifi_connect(const char* ifname, const char* ssid, const char* pass
+     snprintf(cmd, sizeof(cmd), "wapi mode %s 2", dev); /* MANAGED */
+     system(cmd);
+ 
+     if (pass && pass[0]) {
+-        snprintf(cmd, sizeof(cmd), "wapi psk %s %s 3", dev, q_pass);
++        /* ESP32-S3 WAPI needs both CCMP and an explicit WPA2 version. */
++        snprintf(cmd, sizeof(cmd), "wapi psk %s %s 3 2", dev, q_pass);
+         system(cmd);
+     }
+ 
+     snprintf(cmd, sizeof(cmd), "wapi essid %s %s 1", dev, q_ssid);
+     system(cmd);
+-    usleep(2000000); /* wait for AP association */
++    usleep(20000000); /* wait for ESP32-S3 AP association before DHCP */
+ 
+-    /* P1: verify WiFi association before requesting DHCP.
+-     * 'wapi status' always exits 0 (it just prints iface state), so
+-     * checking its return code is useless. Instead, parse the output
+-     * for "Not-Associated" which wapi prints when no AP is joined.
+-     * If popen fails we fall through and let network_wait_connected
+-     * handle the timeout. */
+-    {
+-        bool associated = true;
+-        snprintf(cmd, sizeof(cmd), "wapi status %s", dev);
+-        FILE* fp = popen(cmd, "r");
+-        if (fp) {
+-            char line[256];
+-            while (fgets(line, sizeof(line), fp)) {
+-                if (strstr(line, "Not-Associated")) {
+-                    associated = false;
+-                    break;
+-                }
+-            }
+-            pclose(fp);
+-        }
+-        if (!associated) {
+-            syslog(LOG_ERR,
+-                "[%s] WiFi not associated (no carrier), skipping DHCP\\n", TAG);
+-            return ERROR;
+-        }
+-    }
++    /* ESP32-S3's WAPI has no status subcommand. Let DHCP determine whether
++     * association succeeded instead of emitting usage text and relying on
++     * a non-existent status result. */
+ 
+     snprintf(cmd, sizeof(cmd), "renew %s", dev); /* DHCP */

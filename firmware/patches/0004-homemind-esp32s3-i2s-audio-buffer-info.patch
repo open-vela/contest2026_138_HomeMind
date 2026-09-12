@@ -1,0 +1,28 @@
+diff --git a/arch/xtensa/src/esp32s3/esp32s3_i2s.c b/arch/xtensa/src/esp32s3/esp32s3_i2s.c
+--- a/arch/xtensa/src/esp32s3/esp32s3_i2s.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_i2s.c
+@@ -2990,4 +2990,24 @@ static int i2s_ioctl(struct i2s_dev_s *dev, int cmd, unsigned long arg)
+         break;
+ #endif /* CONFIG_AUDIO_EXCLUDE_STOP */
+ 
++      /* Report the buffers supported by the ESP32-S3 I2S DMA path so the
++       * generic NuttX audio upper-half can allocate and enqueue capture
++       * buffers. */
++
++      case AUDIOIOC_GETBUFFERINFO:
++        {
++          struct ap_buffer_info_s *bufinfo =
++            (struct ap_buffer_info_s *)arg;
++          if (bufinfo == NULL)
++            {
++              ret = -EINVAL;
++              break;
++            }
++
++          bufinfo->nbuffers = CONFIG_ESP32S3_I2S_MAXINFLIGHT;
++          bufinfo->buffer_size = ESP32S3_DMA_BUFLEN_MAX;
++          ret = OK;
++        }
++        break;
++
+       /* AUDIOIOC_ALLOCBUFFER - Allocate an audio buffer

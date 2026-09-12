@@ -1,0 +1,2 @@
+apps/external/Kconfig:87:source "/home/hfy/work/openvela/external/ril/Kconfig"
+external/Kconfig:87:source "/home/hfy/work/openvela/external/ril/Kconfig"

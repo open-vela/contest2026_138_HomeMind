@@ -1,0 +1,24 @@
+label=negative n=20 bin=0764e58f_or_later
+run=1 person=0.582 latency=4150.0 result=DETECTED
+run=2 person=0.586 latency=4150.0 result=DETECTED
+run=3 person=0.602 latency=4150.0 result=DETECTED
+run=4 person=0.586 latency=4150.0 result=DETECTED
+run=5 person=0.598 latency=4150.0 result=DETECTED
+run=6 person=0.574 latency=4150.0 result=DETECTED
+run=7 person=0.598 latency=4150.0 result=DETECTED
+run=8 person=0.605 latency=4150.0 result=DETECTED
+run=9 person=0.633 latency=4150.0 result=DETECTED
+run=10 person=0.664 latency=4150.0 result=DETECTED
+run=11 person=0.621 latency=4150.0 result=DETECTED
+run=12 person=0.633 latency=4150.0 result=DETECTED
+run=13 person=0.582 latency=4150.0 result=DETECTED
+run=14 person=0.594 latency=4150.0 result=DETECTED
+run=15 person=0.57 latency=4150.0 result=DETECTED
+run=16 person=0.617 latency=4150.0 result=DETECTED
+run=17 person=0.57 latency=4150.0 result=DETECTED
+run=18 person=0.594 latency=4150.0 result=DETECTED
+run=19 person=0.57 latency=4150.0 result=DETECTED
+run=20 person=0.57 latency=4150.0 result=DETECTED
+score_min=0.570 max=0.664 mean=0.597
+lat_p50=4150.0 p95=4150.0
+ok=20 fail=0 detected=20 none=0

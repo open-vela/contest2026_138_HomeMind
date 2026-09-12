@@ -1,0 +1,112 @@
+{
+  "captured_at": "2026-09-12",
+  "source_root": "/home/hfy/work/openvela-clean-20260830/contest2026_138_HomeMind/firmware/ai_agent_overlay",
+  "note": "Field-authoritative overlay after vision/KWS integration and dual-MQTT backend sync.",
+  "files": [
+    {
+      "path": "Makefile",
+      "sha256": "32c5cdd8e2cb9d8506063698207a688cf90e4a1c2686e07720118e8632f2a6a9",
+      "size": 6664
+    },
+    {
+      "path": "include/tools/tool_device.h",
+      "sha256": "4348128b6a09ce3265f7b0fb68f9c4bb47aacb5b76a426f01b15c87d674d66d0",
+      "size": 467
+    },
+    {
+      "path": "include/tools/tool_led.h",
+      "sha256": "247ca9ee465d7d746acb61f5a88376beb714b851cc086c540f72942b2f57a9a2",
+      "size": 321
+    },
+    {
+      "path": "include/ui/hm_lcd_display.h",
+      "sha256": "66f6a0cc8de3e4401fdeb24e7cdac021b0765e741d3d97acc1d673b61331498c",
+      "size": 296
+    },
+    {
+      "path": "src/agent_main.c",
+      "sha256": "849de253322f80accc2ca69176184a35c3094c33b667e28f7a850cfa3948b63d",
+      "size": 26159
+    },
+    {
+      "path": "src/channels/cmd_llm.c",
+      "sha256": "af49bc1adac96771e30c3fed1ff893bd59bb41d3a8cb66935523401e0a9fb74b",
+      "size": 21506
+    },
+    {
+      "path": "src/channels/nsh_commands.c",
+      "sha256": "1376c1e88f85543faa1e53f57f87cb2fb3ee55f1d875c553f91da29f4042a13e",
+      "size": 115702
+    },
+    {
+      "path": "src/core/agent_loop.c",
+      "sha256": "adb1de9f5e5ded8f8cc3428037f1b58efbbef188834bc7ceb3528e63e1026256",
+      "size": 56176
+    },
+    {
+      "path": "src/infra/config_store.c",
+      "sha256": "f868675a8c6cbe04f57122a456139d6eaad3dc2e83c98dcbf849fe734d8ac0a6",
+      "size": 5021
+    },
+    {
+      "path": "src/infra/http_proxy.c",
+      "sha256": "a99c775aa06d24a5beb79a928e01fa6b18a792ba55d462a765b68d228d70ef06",
+      "size": 12880
+    },
+    {
+      "path": "src/infra/network_manager.c",
+      "sha256": "5613df6d40005e2a50b6415a7e2d4af976be3fdf7bd67938935b55b467e09559",
+      "size": 44916
+    },
+    {
+      "path": "src/infra/vela_tls.c",
+      "sha256": "68cf5f416673884473954b26eb22de0bbecbe947c3caa716d51ca47e94673090",
+      "size": 56283
+    },
+    {
+      "path": "src/tools/tool_device.c",
+      "sha256": "c7247642cdd1b91052f386f3e5b44982bb8e6d99e1cd1ec10cc85bb25ef94eb8",
+      "size": 3002
+    },
+    {
+      "path": "src/tools/tool_led.c",
+      "sha256": "6fdd7be0703bf9a34e021f42749790bc7eac44730bbb900217c98aadb5118f7e",
+      "size": 2568
+    },
+    {
+      "path": "src/tools/tool_registry.c",
+      "sha256": "560ad19014ca404c1c478cf51fd8c6786a41e17162e3ea69fa97ee82bada9c67",
+      "size": 22932
+    },
+    {
+      "path": "src/ui/hm_lcd_display.c",
+      "sha256": "ed59a39f864c2b76a6f1fde305aa7b5d6c104d996ef230f7c900f31f8f1ede96",
+      "size": 28007
+    },
+    {
+      "path": "src/vision/kws_model_data.cc",
+      "sha256": "5b1377def1b9dd672544945d7131b5efd08d2a424cc885b4c9b097c4e34d32be",
+      "size": 541
+    },
+    {
+      "path": "src/vision/kws_model_data.h",
+      "sha256": "eca4574e343d62135d9cfc499480d64e8a581be0746f33466e32720c8608a931",
+      "size": 319
+    },
+    {
+      "path": "src/vision/person_detect.cc",
+      "sha256": "34eda167a5da58f97e4d6b30a2aec6fa008dac492a956f7b614e6d61ffba4d59",
+      "size": 18566
+    },
+    {
+      "path": "src/vision/person_detect_model_data.cc",
+      "sha256": "0c6dcb0420f8137b746d5dfd537128ecce059765ee562195589d11e71bad8d67",
+      "size": 1853861
+    },
+    {
+      "path": "src/vision/person_detect_model_data.h",
+      "sha256": "c455a20f3335533aebae7e30e3b8bd9e16fbb6541b15d8dca706bff0800cae46",
+      "size": 429
+    }
+  ]
+}
