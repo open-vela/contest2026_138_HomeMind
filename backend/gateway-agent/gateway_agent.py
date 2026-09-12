@@ -129,7 +129,35 @@ class SerialExecutor:
                 line = f"ask {nl}\n"
             self.ser.reset_input_buffer()
             self.ser.write(line.encode())
-            out = self._read_until_prompt(timeout=timeout)
+            # 当前固件 ask 为异步：先打印 "Sent to agent" 并立刻回 vela>，
+            # 工具/Agent 最终回复稍后以 "[Agent]: ..." 打出。必须等到 Agent 段。
+            # 注意：pyserial.read(n) 会阻塞凑满 n 字节；这里用 in_waiting 非阻塞攒包。
+            old_timeout = self.ser.timeout
+            self.ser.timeout = 0.05
+            try:
+                deadline = time.time() + timeout
+                buf = b""
+                saw_sent = False
+                while time.time() < deadline:
+                    n = self.ser.in_waiting
+                    chunk = self.ser.read(n if n else 1)
+                    if chunk:
+                        buf += chunk
+                        text = buf.decode(errors="replace")
+                        if (not saw_sent) and "Sent to agent" in text:
+                            saw_sent = True
+                        if saw_sent and "[Agent]:" in text:
+                            if "vela>" in text.split("[Agent]:", 1)[1]:
+                                # 再吃一点残留
+                                n2 = self.ser.in_waiting
+                                if n2:
+                                    buf += self.ser.read(n2)
+                                break
+                    else:
+                        time.sleep(0.02)
+            finally:
+                self.ser.timeout = old_timeout
+            out = buf.decode(errors="replace")
             return out
 
     def close(self):
