@@ -159,6 +159,7 @@ static void cmd_help(void)
         "  media_probe [jpeg]   - Probe OV2640 RGB565 frame + I2S mic (jpeg: only if sensor supports it)\n"
         "  audio_stream [sec]     - Continuous PCM capture via audio_capture API\n"
         "  wake_loop [sec] [thr] [hold] - Energy VAD wake + LED blink\n"
+        "  wake_kws [thr] - Hello openvela KWS score + LED\n"
         "  wake_rec pos|neg <i> [sec] - Record KWS sample to /data\n"
         "  kws_dump pos|neg <i> - Dump sample as base64\n"
         "  set_voice_tts <name>   - Switch TTS backend\n"
@@ -1175,7 +1176,7 @@ static void cmd_wake_rec(int argc, char **argv)
     char path[64];
     int rate = 16000;
     int want;
-    int got;
+    int got = 0;
     unsigned char *buf;
     FILE *fp;
     int fd;
@@ -1214,6 +1215,18 @@ static void cmd_wake_rec(int argc, char **argv)
     printf("[WakeRec] %s idx=%d sec=%d -> %s\\n", label, idx, seconds, path);
     printf("[WakeRec] START speaking/noise now...\\n");
     fflush(stdout);
+    if (strcmp(label, "pos") == 0)
+        hm_lcd_show_text("SAY: NI HAO OPENVELA");
+    else
+        hm_lcd_show_text("KEEP QUIET");
+    {
+        int lfd = open("/dev/gpio0", O_RDWR);
+        if (lfd >= 0) {
+            ioctl(lfd, GPIOC_WRITE, 1UL);
+            close(lfd);
+        }
+    }
+    usleep(600000);
 
     fd = open("/dev/audio/pcm_in0", O_RDWR | O_NONBLOCK);
     if (fd < 0) {
@@ -1280,6 +1293,7 @@ static void cmd_wake_rec(int argc, char **argv)
     printf("[WakeRec] captured %d bytes chunks=%d\\n", got, chunk);
     if (got < want / 2) {
         printf("[WakeRec] FAIL short\\n");
+        hm_lcd_show_text("FAIL");
         free(buf);
         return;
     }
@@ -1289,10 +1303,208 @@ static void cmd_wake_rec(int argc, char **argv)
         free(buf);
         return;
     }
-    fwrite(buf, 1, (size_t)got, fp);
-    fclose(fp);
+    {
+        size_t nw = fwrite(buf, 1, (size_t)got, fp);
+        int ferr = ferror(fp);
+        fflush(fp);
+        fsync(fileno(fp));
+        fclose(fp);
+        printf("[WakeRec] wrote %u / %d ferr=%d\\n", (unsigned)nw, got, ferr);
+        if (nw != (size_t)got) {
+            printf("[WakeRec] FAIL fwrite\\n");
+            hm_lcd_show_text("WR FAIL");
+            free(buf);
+            return;
+        }
+    }
     printf("[WakeRec] SAVED %s (%d bytes)\\n", path, got);
+    hm_lcd_show_text("SAVED OK");
+    usleep(500000);
     free(buf);
+}
+
+
+
+/* ── Trained KWS (你好 openvela) linear model ───────────────────
+ * Features: log-mel 16 bands, 40 frames, stats mean/std/max/dmean = 64
+ * Score: z = ((f-mu)*sd_inv)·w_q*scale + b; sigmoid >= 0.5 */
+#include "vision/kws_model_data.h"
+
+static float kws_score_pcm(const int16_t *pcm, int nsamp)
+{
+    float rms[KWS_N_FRAMES], zcr[KWS_N_FRAMES];
+    float feat[KWS_FEATURE_DIM];
+    int fi, i;
+    int need = (KWS_N_FRAMES-1)*KWS_HOP + KWS_WIN;
+    int16_t peak = 1;
+    if (nsamp < KWS_WIN * 4)
+        return -1.0f;
+    if (nsamp < need)
+        need = nsamp;
+    /* normalize to unit peak */
+    for (i = 0; i < nsamp; i++) {
+        int16_t v = pcm[i];
+        if (v < 0) v = -v;
+        if (v > peak) peak = v;
+    }
+    memset(rms, 0, sizeof(rms));
+    memset(zcr, 0, sizeof(zcr));
+    for (fi = 0; fi < KWS_N_FRAMES; fi++) {
+        const int16_t *s = pcm + fi * KWS_HOP;
+        float e = 0;
+        int zc = 0;
+        if (fi * KWS_HOP + KWS_WIN > nsamp)
+            break;
+        for (i = 0; i < KWS_WIN; i++) {
+            float v = (float)s[i] / (float)peak;
+            e += v * v;
+            if (i > 0 && ((s[i] >= 0) != (s[i - 1] >= 0)))
+                zc++;
+        }
+        rms[fi] = (float)sqrt(e / KWS_WIN);
+        zcr[fi] = (float)zc / (float)(KWS_WIN - 1);
+    }
+    {
+        float sr=0, sz=0, mxr=0, zvar=0, var=0;
+        int n = KWS_N_FRAMES;
+        for (fi = 0; fi < n; fi++) {
+            sr += rms[fi]; sz += zcr[fi];
+            if (rms[fi] > mxr) mxr = rms[fi];
+        }
+        sr /= n; sz /= n;
+        for (fi = 0; fi < n; fi++) {
+            float d = rms[fi] - sr; var += d*d;
+            float dz = zcr[fi] - sz; zvar += dz*dz;
+        }
+        feat[0] = sr;
+        feat[1] = (float)sqrt(var / n);
+        feat[2] = feat[1] / (sr + 1e-9f);
+        feat[3] = sz;
+        feat[4] = (float)sqrt(zvar / n);
+        feat[5] = (rms[0]+rms[1]+rms[2]+rms[3]+rms[4]+rms[5]+rms[6]+rms[7]+rms[8]+rms[9]) / 10.0f / (sr + 1e-9f);
+        feat[6] = (mxr - sr) / (sr + 1e-9f);
+        feat[7] = (rms[0]+rms[1]+rms[2]+rms[3]+rms[4] - (rms[n-5]+rms[n-4]+rms[n-3]+rms[n-2]+rms[n-1])) / 5.0f / (sr + 1e-9f);
+    }
+    {
+        float z = kws_b;
+        for (i = 0; i < KWS_FEATURE_DIM; i++) {
+            float fx = (feat[i] - kws_mu[i]) * kws_sd_inv[i];
+            z += fx * (float)kws_w_q[i] * kws_w_scale;
+        }
+        printf("[KWS] f2=%.3f f3=%.3f f4=%.3f z=%.3f\n", feat[2], feat[3], feat[4], z);
+        return 1.0f / (1.0f + expf(-z));
+    }
+}
+
+/* Capture ~3s and score. Used by wake_kws. */
+static int kws_capture_score(float *score)
+{
+    const int rate = 16000;
+    const int want = 3 * rate * 2;
+    int16_t *pcm;
+    int got = 0;
+    int fd, started = 0, bsize = 640;
+    struct audio_caps_desc_s caps;
+    struct audio_buf_desc_s desc;
+    struct ap_buffer_info_s info;
+    struct ap_buffer_s *apb = NULL;
+    struct pollfd pfd;
+
+    pcm = (int16_t *)malloc((size_t)want);
+    if (!pcm)
+        return -1;
+    fd = open("/dev/audio/pcm_in0", O_RDWR | O_NONBLOCK);
+    if (fd < 0) {
+        free(pcm);
+        return -1;
+    }
+    memset(&caps, 0, sizeof(caps));
+    caps.caps.ac_len = sizeof(struct audio_caps_s);
+    caps.caps.ac_type = AUDIO_TYPE_INPUT;
+    caps.caps.ac_controls.w = rate;
+    caps.caps.ac_controls.b[2] = 16;
+    caps.caps.ac_channels = 1;
+    caps.caps.ac_format.hw = AUDIO_FMT_PCM;
+    if (ioctl(fd, AUDIOIOC_CONFIGURE, (uintptr_t)&caps) < 0) {
+        close(fd);
+        free(pcm);
+        return -1;
+    }
+    memset(&info, 0, sizeof(info));
+    (void)ioctl(fd, AUDIOIOC_GETBUFFERINFO, (uintptr_t)&info);
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    while (got + bsize <= want) {
+        struct ap_buffer_s *ap = NULL;
+        memset(&desc, 0, sizeof(desc));
+        desc.numbytes = bsize;
+        desc.u.pbuffer = &ap;
+        if (ioctl(fd, AUDIOIOC_ALLOCBUFFER, (uintptr_t)&desc) != (int)sizeof(desc) || !ap)
+            break;
+        memset(&desc, 0, sizeof(desc));
+        desc.u.buffer = ap;
+        desc.numbytes = bsize;
+        if (ioctl(fd, AUDIOIOC_ENQUEUEBUFFER, (uintptr_t)&desc) < 0) {
+            memset(&desc, 0, sizeof(desc));
+            desc.u.buffer = ap;
+            ioctl(fd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
+            break;
+        }
+        if (!started) {
+            if (ioctl(fd, AUDIOIOC_START, 0) < 0)
+                break;
+            started = 1;
+            poll(&pfd, 1, 800);
+        } else {
+            usleep(30000);
+        }
+        if (ap->nbytes > 0) {
+            memcpy((char *)pcm + got, ap->samp, ap->nbytes);
+            got += ap->nbytes;
+        }
+        memset(&desc, 0, sizeof(desc));
+        desc.u.buffer = ap;
+        ioctl(fd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
+    }
+    if (started)
+        ioctl(fd, AUDIOIOC_STOP, 0);
+    close(fd);
+    printf("[KWS] got=%d nsamp=%d\n", got, got/2);
+    *score = kws_score_pcm(pcm, got / 2);
+    printf("[KWS] after score=%.4f\n", *score);
+    free(pcm);
+    return (got >= want / 2) ? 0 : -1;
+}
+
+static void cmd_wake_kws(int argc, char **argv)
+{
+    float thr = 0.55f;
+    float score = 0;
+    int rc;
+    if (argc > 1) {
+        float t = (float)atof(argv[1]);
+        if (t > 0.01f && t < 0.99f)
+            thr = t;
+    }
+    hm_lcd_show_text("LISTEN 3S...");
+    printf("[KWS] capturing 3s...\n");
+    fflush(stdout);
+    rc = kws_capture_score(&score);
+    if (rc != 0) {
+        printf("[KWS] FAIL capture\n");
+        hm_lcd_show_text("MIC FAIL");
+        return;
+    }
+    printf("[KWS] score=%.3f thr=%.2f %s\n", score, thr,
+           score >= thr ? "HIT" : "miss");
+    if (score >= thr) {
+        hm_lcd_show_text("WAKE! LED");
+        hm_led_blink(3, 80, 80);
+        printf("[KWS] LED blinked (local cmd)\n");
+    } else {
+        hm_lcd_show_text("NO WAKE");
+    }
 }
 
 
@@ -3110,6 +3322,8 @@ static void* cli_thread(void* arg)
             cmd_audio_stream(argc, argv);
         else if (strcmp(cmd, "wake_loop") == 0)
             cmd_wake_loop(argc, argv);
+        else if (strcmp(cmd, "wake_kws") == 0)
+            cmd_wake_kws(argc, argv);
         else if (strcmp(cmd, "wake_rec") == 0)
             cmd_wake_rec(argc, argv);
         else if (strcmp(cmd, "kws_dump") == 0)

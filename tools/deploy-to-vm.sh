@@ -47,6 +47,8 @@ overlay_files=(
   src/vision/person_detect.cc
   src/vision/person_detect_model_data.cc
   src/vision/person_detect_model_data.h
+  src/vision/kws_model_data.cc
+  src/vision/kws_model_data.h
 )
 
 printf '[INFO] Installing HomeMind ai_agent overlay\n'
