@@ -89,4 +89,51 @@ function getCommand(commandId) {
   return authRequest('GET', '/v1/commands/' + commandId)
 }
 
-module.exports = { login, wxLogin, getDevices, sendCommand, getCommand, request, authRequest, baseUrl }
+// ---- 家庭待办 / 日程（跨端同步：小程序、板端、小爱提醒共用一份数据）----
+function getTasks(status) {
+  const qs = status ? '?status=' + encodeURIComponent(status) : ''
+  return authRequest('GET', '/v1/tasks' + qs)
+}
+
+function createTask(data) {
+  return authRequest('POST', '/v1/tasks', data)
+}
+
+function updateTask(taskId, data) {
+  return authRequest('PATCH', '/v1/tasks/' + taskId, data)
+}
+
+// ---- 家庭资产 ----
+function getAssets() {
+  return authRequest('GET', '/v1/assets')
+}
+
+function createAsset(data) {
+  return authRequest('POST', '/v1/assets', data)
+}
+
+// ---- 端侧上报的感知事件（人员识别、唤醒、提醒等）----
+function getEvents(limit) {
+  return authRequest('GET', '/v1/events?limit=' + (limit || 20))
+}
+
+// ---- 场景与语义规划 ----
+function runScene(scene, deviceId, dryRun) {
+  return authRequest('POST', '/v1/scenes', {
+    scene: scene || 'bedtime',
+    device_id: deviceId || '',
+    dry_run: !!dryRun
+  })
+}
+
+function planText(text, execute) {
+  return authRequest('POST', '/v1/agent/plan', {
+    text: text,
+    execute: execute !== false
+  })
+}
+
+module.exports = {
+  login, wxLogin, getDevices, sendCommand, getCommand, request, authRequest, baseUrl,
+  getTasks, createTask, updateTask, getAssets, createAsset, getEvents, runScene, planText
+}

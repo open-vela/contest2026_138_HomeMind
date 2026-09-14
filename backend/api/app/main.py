@@ -13,8 +13,10 @@ from . import mqtt_client as mqtt_module
 from .ws_hub import init as ws_init, drain
 from .models import Command
 from .routers import (health, auth, devices, commands, media,
-                             intents, events, tasks, assets,
+                             intents, events, tasks, assets, scenes, xiaoai, agent,
                              ws as ws_router)
+from .reminder_worker import start_reminder_worker
+from .ha_bridge import start_ha_bridge
 
 logging.basicConfig(level=logging.INFO)
 # httpx/httpcore 在 INFO 级会打印完整请求 URL，而微信 jscode2session 把 AppSecret
@@ -55,6 +57,8 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(drain())
     asyncio.create_task(expire_sweeper())
     start_mqtt()  # 在独立线程跑 MQTT 循环
+    start_reminder_worker(interval_sec=20)
+    start_ha_bridge(interval_sec=5)
     if settings.RELAY_MODE:
         # 注入 relay 响应处理（mqtt_client 收到 homemind/relay/resp 时回调）
         from .relay_client import handle_relay_resp
@@ -87,4 +91,7 @@ else:
     app.include_router(events.router)
     app.include_router(tasks.router)
     app.include_router(assets.router)
+    app.include_router(scenes.router)
+app.include_router(xiaoai.router)
+app.include_router(agent.router)
 app.include_router(ws_router.router)

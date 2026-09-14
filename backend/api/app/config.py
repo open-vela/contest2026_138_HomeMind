@@ -78,3 +78,7 @@ class Settings:
 
 
 settings = Settings()
+# 原始音视频出站默认拒绝（严格私有化）
+settings.PRIVACY_MODE = os.getenv("PRIVACY_MODE", "1") not in ("0", "false", "False")
+settings.DEFAULT_SPEAK_DEVICE = os.getenv("DEFAULT_SPEAK_DEVICE", "esp32s3-eye")
+

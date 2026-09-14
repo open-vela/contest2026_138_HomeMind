@@ -160,6 +160,9 @@ static void cmd_help(void)
         "  audio_stream [sec]     - Continuous PCM capture via audio_capture API\n"
         "  wake_loop [sec] [thr] [hold] - Energy VAD wake + LED blink\n"
         "  wake_kws [thr] - Hello openvela KWS score + LED\n"
+        "  kws_listen start|stop|status [thr] [vad_thr] - Continuous offline KWS\n"
+        "  intent_send <text...> - MQTT intent to home agent\n"
+        "  vision_loop start|stop [sec] - Periodic vision tick\n"
         "  wake_rec pos|neg <i> [sec] - Record KWS sample to /data\n"
         "  kws_dump pos|neg <i> - Dump sample as base64\n"
         "  set_voice_tts <name>   - Switch TTS backend\n"
@@ -1475,6 +1478,365 @@ static int kws_capture_score(float *score)
     printf("[KWS] after score=%.4f\n", *score);
     free(pcm);
     return (got >= want / 2) ? 0 : -1;
+}
+
+/* ── Continuous offline KWS listen (background thread) ──────────
+ * kws_listen start [thr] [vad_thr]
+ * kws_listen stop
+ * kws_listen status
+ *
+ * Pipeline: energy VAD gate -> 1.2s speech window -> kws_score_pcm
+ * On HIT: LED + LCD + mqtt event {"type":"kws_wake",...}
+ * Offline: no network required; MQTT publish is best-effort.
+ */
+static volatile int g_kws_listen_run = 0;
+static volatile int g_kws_listen_hits = 0;
+static volatile int g_kws_listen_frames = 0;
+static volatile float g_kws_listen_last = 0.0f;
+static pthread_t g_kws_listen_tid;
+static int g_kws_listen_thr_x100 = 55;   /* score thr * 100 */
+static int g_kws_listen_vad = 900;       /* energy RMS gate */
+
+#define KWS_LISTEN_CHUNK   640
+#define KWS_LISTEN_RATE    16000
+#define KWS_LISTEN_RING_N  96            /* ~1.92s @ 20ms */
+#define KWS_LISTEN_SCORE_N 60            /* 1.2s window */
+
+typedef struct {
+    int16_t samp[KWS_LISTEN_CHUNK / 2];
+    int used;
+} kws_chunk_s;
+
+static int kws_listen_open_mic(int *out_fd)
+{
+    struct audio_caps_desc_s caps;
+    struct pollfd pfd;
+    int fd;
+
+    fd = open("/dev/audio/pcm_in0", O_RDWR | O_NONBLOCK);
+    if (fd < 0)
+        return -1;
+    memset(&caps, 0, sizeof(caps));
+    caps.caps.ac_len = sizeof(struct audio_caps_s);
+    caps.caps.ac_type = AUDIO_TYPE_INPUT;
+    caps.caps.ac_controls.w = KWS_LISTEN_RATE;
+    caps.caps.ac_controls.b[2] = 16;
+    caps.caps.ac_channels = 1;
+    caps.caps.ac_format.hw = AUDIO_FMT_PCM;
+    if (ioctl(fd, AUDIOIOC_CONFIGURE, (uintptr_t)&caps) < 0) {
+        close(fd);
+        return -1;
+    }
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    *out_fd = fd;
+    return 0;
+}
+
+static int kws_listen_read_chunk(int fd, int16_t *dst, int *started,
+                                 struct pollfd *pfd)
+{
+    struct audio_buf_desc_s desc;
+    struct ap_buffer_s *apb = NULL;
+    int n = 0;
+
+    memset(&desc, 0, sizeof(desc));
+    desc.numbytes = KWS_LISTEN_CHUNK;
+    desc.u.pbuffer = &apb;
+    if (ioctl(fd, AUDIOIOC_ALLOCBUFFER, (uintptr_t)&desc) !=
+            (int)sizeof(desc) || !apb)
+        return -1;
+    memset(&desc, 0, sizeof(desc));
+    desc.u.buffer = apb;
+    desc.numbytes = KWS_LISTEN_CHUNK;
+    if (ioctl(fd, AUDIOIOC_ENQUEUEBUFFER, (uintptr_t)&desc) < 0) {
+        memset(&desc, 0, sizeof(desc));
+        desc.u.buffer = apb;
+        ioctl(fd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
+        return -1;
+    }
+    if (!*started) {
+        if (ioctl(fd, AUDIOIOC_START, 0) < 0) {
+            memset(&desc, 0, sizeof(desc));
+            desc.u.buffer = apb;
+            ioctl(fd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
+            return -1;
+        }
+        *started = 1;
+        poll(pfd, 1, 800);
+    } else {
+        usleep(30000);
+    }
+    if (apb->nbytes > 0) {
+        n = apb->nbytes;
+        if (n > KWS_LISTEN_CHUNK)
+            n = KWS_LISTEN_CHUNK;
+        memcpy(dst, apb->samp, n);
+    }
+    memset(&desc, 0, sizeof(desc));
+    desc.u.buffer = apb;
+    ioctl(fd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
+    return n;
+}
+
+static void *kws_listen_worker(void *arg)
+{
+    float thr = (float)g_kws_listen_thr_x100 / 100.0f;
+    float vad_thr = (float)g_kws_listen_vad;
+    int16_t *ring = NULL;
+    int16_t chunk[KWS_LISTEN_CHUNK / 2];
+    int fd = -1, started = 0;
+    struct pollfd pfd;
+    int hold = 0, speech = 0, silence = 0;
+    int frames = 0;
+    (void)arg;
+
+    ring = (int16_t *)malloc(sizeof(int16_t) *
+                             (KWS_LISTEN_RING_N * (KWS_LISTEN_CHUNK / 2)));
+    if (!ring) {
+        printf("[KWS-L] OOM ring\n");
+        g_kws_listen_run = 0;
+        return NULL;
+    }
+    memset(ring, 0, sizeof(int16_t) *
+           (KWS_LISTEN_RING_N * (KWS_LISTEN_CHUNK / 2)));
+    if (kws_listen_open_mic(&fd) != 0) {
+        printf("[KWS-L] mic open fail errno=%d\n", errno);
+        free(ring);
+        g_kws_listen_run = 0;
+        return NULL;
+    }
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    printf("[KWS-L] listening thr=%.2f vad=%.0f\n", thr, vad_thr);
+    fflush(stdout);
+    hm_lcd_show_text("KWS LISTEN");
+
+    while (g_kws_listen_run) {
+        int n = kws_listen_read_chunk(fd, chunk, &started, &pfd);
+        float rms;
+        if (n <= 0)
+            continue;
+        if (n < KWS_LISTEN_CHUNK) {
+            memset((char *)chunk + n, 0, KWS_LISTEN_CHUNK - n);
+            n = KWS_LISTEN_CHUNK;
+        }
+        /* ring write */
+        {
+            int idx = frames % KWS_LISTEN_RING_N;
+            memcpy(ring + idx * (KWS_LISTEN_CHUNK / 2), chunk,
+                   sizeof(int16_t) * (KWS_LISTEN_CHUNK / 2));
+        }
+        frames++;
+        g_kws_listen_frames = frames;
+        rms = hm_chunk_rms((unsigned char *)chunk, n);
+
+        if (rms >= vad_thr) {
+            hold++;
+            silence = 0;
+            if (!speech && hold >= 3) {
+                speech = 1;
+                hold = 0;
+            }
+        } else {
+            hold = 0;
+            if (speech) {
+                silence++;
+                if (silence >= 8) { /* ~160ms quiet -> score window */
+                    float score = -1.0f;
+                    int16_t *win = (int16_t *)malloc(
+                        sizeof(int16_t) * KWS_LISTEN_SCORE_N *
+                        (KWS_LISTEN_CHUNK / 2));
+                    if (win) {
+                        int i, got = 0;
+                        int startf = frames - KWS_LISTEN_SCORE_N;
+                        if (startf < 0)
+                            startf = 0;
+                        for (i = startf; i < frames && got < KWS_LISTEN_SCORE_N; i++) {
+                            int idx = i % KWS_LISTEN_RING_N;
+                            memcpy(win + got * (KWS_LISTEN_CHUNK / 2),
+                                   ring + idx * (KWS_LISTEN_CHUNK / 2),
+                                   sizeof(int16_t) * (KWS_LISTEN_CHUNK / 2));
+                            got++;
+                        }
+                        if (got >= 20) {
+                            score = kws_score_pcm(win, got * (KWS_LISTEN_CHUNK / 2));
+                            g_kws_listen_last = score;
+                            printf("[KWS-L] score=%.3f thr=%.2f frames=%d\n",
+                                   score, thr, got);
+                            fflush(stdout);
+                            if (score >= thr) {
+                                g_kws_listen_hits++;
+                                printf("[KWS-L] HIT #%d\n", g_kws_listen_hits);
+                                fflush(stdout);
+                                hm_lcd_show_text("WAKE OK");
+                                hm_led_blink(3, 80, 80);
+                                {
+                                    char ev[160];
+                                    snprintf(ev, sizeof(ev),
+                                             "{\"type\":\"kws_wake\","
+                                             "\"keyword\":\"hello_openvela\","
+                                             "\"score\":%.3f,\"hits\":%d}",
+                                             score, g_kws_listen_hits);
+                                    if (mqtt_channel_send("homemind", ev) == 0)
+                                        printf("[KWS-L] mqtt published\n");
+                                    else
+                                        printf("[KWS-L] mqtt offline\n");
+                                    fflush(stdout);
+                                }
+                                hm_lcd_show_text("KWS LISTEN");
+                            }
+                        }
+                        free(win);
+                    }
+                    speech = 0;
+                    silence = 0;
+                }
+            }
+        }
+    }
+    if (started)
+        ioctl(fd, AUDIOIOC_STOP, 0);
+    if (fd >= 0)
+        close(fd);
+    free(ring);
+    printf("[KWS-L] stopped frames=%d hits=%d last=%.3f\n",
+           frames, g_kws_listen_hits, g_kws_listen_last);
+    fflush(stdout);
+    return NULL;
+}
+
+static void cmd_kws_listen(int argc, char **argv)
+{
+    const char *sub = (argc >= 2) ? argv[1] : "status";
+    if (strcmp(sub, "start") == 0) {
+        if (g_kws_listen_run) {
+            printf("[KWS-L] already running\n");
+            return;
+        }
+        if (argc >= 3) {
+            float t = (float)atof(argv[2]);
+            if (t > 0.01f && t < 0.99f)
+                g_kws_listen_thr_x100 = (int)(t * 100.0f + 0.5f);
+        }
+        if (argc >= 4) {
+            int v = atoi(argv[3]);
+            if (v > 50 && v < 20000)
+                g_kws_listen_vad = v;
+        }
+        g_kws_listen_run = 1;
+        g_kws_listen_hits = 0;
+        g_kws_listen_frames = 0;
+        if (pthread_create(&g_kws_listen_tid, NULL, kws_listen_worker, NULL) != 0) {
+            printf("[KWS-L] thread create fail\n");
+            g_kws_listen_run = 0;
+            return;
+        }
+        pthread_detach(g_kws_listen_tid);
+        printf("[KWS-L] started thr=%.2f vad=%d\n",
+               (float)g_kws_listen_thr_x100 / 100.0f, g_kws_listen_vad);
+    } else if (strcmp(sub, "stop") == 0) {
+        g_kws_listen_run = 0;
+        printf("[KWS-L] stop requested\n");
+    } else {
+        printf("[KWS-L] run=%d hits=%d frames=%d last=%.3f thr=%.2f vad=%d\n",
+               g_kws_listen_run, g_kws_listen_hits, g_kws_listen_frames,
+               g_kws_listen_last,
+               (float)g_kws_listen_thr_x100 / 100.0f, g_kws_listen_vad);
+    }
+}
+
+
+/* ── Intent send via MQTT (home private cloud) ─────────────────
+ * intent_send 我准备睡觉了
+ * Publishes {"type":"intent","text":"..."} on homemind topic.
+ * Offline: mqtt_channel_send fails, local tools still work.
+ */
+static void cmd_intent_send(int argc, char **argv)
+{
+    char text[200];
+    char json[280];
+    int i, n = 0;
+    if (argc < 2) {
+        printf("Usage: intent_send <text...>\n");
+        return;
+    }
+    text[0] = 0;
+    for (i = 1; i < argc && n < (int)sizeof(text) - 4; i++) {
+        int l = snprintf(text + n, sizeof(text) - n, "%s%s",
+                         n ? " " : "", argv[i]);
+        if (l < 0)
+            break;
+        n += l;
+    }
+    for (i = 0; text[i]; i++) {
+        if (text[i] == '"' || text[i] == '\\')
+            text[i] = '\'';
+    }
+    snprintf(json, sizeof(json),
+             "{\"type\":\"intent\",\"text\":\"%s\",\"device_id\":\"esp32s3-eye\"}",
+             text);
+    printf("[Intent] publish %s\n", json);
+    fflush(stdout);
+    if (mqtt_channel_send("homemind", json) == 0)
+        printf("[Intent] MQTT ok\n");
+    else
+        printf("[Intent] MQTT offline — local tools only\n");
+    fflush(stdout);
+}
+
+/* ── Periodic vision tick ───────────────────────────────────
+ * Camera+TFLM must not overlap kws_listen. This loop only
+ * heartbeats; run `vision local` when audio is idle.
+ */
+static volatile int g_vision_loop_run = 0;
+static pthread_t g_vision_loop_tid;
+static int g_vision_loop_sec = 10;
+
+static void *vision_loop_worker(void *arg)
+{
+    (void)arg;
+    printf("[VisLoop] start interval=%ds (run vision local when audio idle)\n",
+           g_vision_loop_sec);
+    fflush(stdout);
+    while (g_vision_loop_run) {
+        printf("[VisLoop] tick\n");
+        fflush(stdout);
+        sleep(g_vision_loop_sec > 0 ? g_vision_loop_sec : 10);
+    }
+    printf("[VisLoop] stopped\n");
+    return NULL;
+}
+
+static void cmd_vision_loop(int argc, char **argv)
+{
+    const char *sub = (argc >= 2) ? argv[1] : "status";
+    if (strcmp(sub, "start") == 0) {
+        if (g_vision_loop_run) {
+            printf("[VisLoop] already running\n");
+            return;
+        }
+        if (argc >= 3) {
+            int v = atoi(argv[2]);
+            if (v >= 3 && v <= 300)
+                g_vision_loop_sec = v;
+        }
+        g_vision_loop_run = 1;
+        if (pthread_create(&g_vision_loop_tid, NULL, vision_loop_worker, NULL)) {
+            printf("[VisLoop] thread fail\n");
+            g_vision_loop_run = 0;
+            return;
+        }
+        pthread_detach(g_vision_loop_tid);
+        printf("[VisLoop] started sec=%d\n", g_vision_loop_sec);
+    } else if (strcmp(sub, "stop") == 0) {
+        g_vision_loop_run = 0;
+        printf("[VisLoop] stop requested\n");
+    } else {
+        printf("[VisLoop] run=%d sec=%d\n", g_vision_loop_run, g_vision_loop_sec);
+    }
 }
 
 static void cmd_wake_kws(int argc, char **argv)
@@ -3324,6 +3686,12 @@ static void* cli_thread(void* arg)
             cmd_wake_loop(argc, argv);
         else if (strcmp(cmd, "wake_kws") == 0)
             cmd_wake_kws(argc, argv);
+        else if (strcmp(cmd, "kws_listen") == 0)
+            cmd_kws_listen(argc, argv);
+        else if (strcmp(cmd, "intent_send") == 0)
+            cmd_intent_send(argc, argv);
+        else if (strcmp(cmd, "vision_loop") == 0)
+            cmd_vision_loop(argc, argv);
         else if (strcmp(cmd, "wake_rec") == 0)
             cmd_wake_rec(argc, argv);
         else if (strcmp(cmd, "kws_dump") == 0)
