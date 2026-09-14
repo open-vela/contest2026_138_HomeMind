@@ -32,6 +32,14 @@
 - `SOURCE_SNAPSHOT.json` 已按当前 overlay 重新生成。Windows 主副本落后于本现场版本，不得用 Windows 旧树覆盖现场。
 - 官方 PR #1 仍 open；合入由队伍负责人浏览器完成 CLA + Rebase，不以 PR 存在冒充官方分支已合入。
 
+### S0 官方合入完成（2026-09-14）
+
+- 根因：历史提交使用 GitHub 匿名邮箱导致 CLA 无法校验；已全部改写为 `2760216167@qq.com`。
+- 过程：filter-branch 误改基线后，重建 `contest-final` 以官方 `961cf68` 为 parent，单提交承载完整树。
+- PR #2 已合入官方 `dev-ai-contest-2026`，merged commit **`1b412343b51d641e224585d49d5939aeed8d2cd1`**。
+- 已从官方分支复核可见：`LICENSE`、`docs/evidence/2026-09-12_s2_led_deviceinfo_pass.md` 等。
+- 旧 PR #1 保持 closed；后续材料以官方分支为准继续补交/更新。
+
 ### 证据与版本边界
 
 - [09-09 摄像头/网络探针](docs/evidence/2026-09-09_camera_network_probe.md)：Ubuntu API、gateway、relay 均 active，API health ok；正式流程复测在稳定别名对应的 ACM0 上看到 `MEDIA_PROBE_BEGIN`、`open_enter`、`[CAM-OPEN] mutex_enter`，未见 `mutex_locked`，随后 heap/网络无响应；网关已恢复 active。该证据把卡点定位到 capture manager 的锁等待，但仍未证明锁持有者或整机硬锁死。交接细节见[摄像头交接记录](docs/evidence/2026-09-09_camera_handoff.md)。

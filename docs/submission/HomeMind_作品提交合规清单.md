@@ -20,7 +20,7 @@
 | 项目 | 状态 | 结论与证据 |
 | --- | --- | --- |
 | 官方模板与报告 | 部分完成 | 有原版和事实工作副本；正式报告待定稿，本轮只更新 Markdown，不导出 PDF |
-| 官方远端 | 部分完成 | 2026-09-12 仍为模板 `961cf680…`；PR #1 open，head `73baee3…`；`cla/signature` 未上报、Actions runs=0、`/check-cla` 无效；合入待组委/Actions |
+| 官方远端 | 已验收（合入） | 2026-09-14 PR #2 合入；官方 `dev-ai-contest-2026` HEAD `1b412343b51d641e224585d49d5939aeed8d2cd1`；CLA `2760216167@qq.com` 通过 |
 | 固件版本 | 部分完成→归集完成待合入 | Ubuntu 权威仓已归集视觉/KWS/2026-09-12 产物（BIN `9cfe649e…`/ELF `b2ffef6c…`）与双 MQTT；fork `73baee3` 已推送，官方分支未合入 |
 | AI 日志 | 部分完成 | 14 份会话（07-28~09-09、2016 events）已有有效历史记录并通过 `validate-log.py` **ALL OK**；当前 `logs/Miles-hfy/` 与 manifest 在本地未跟踪，须纳入最终提交；远端 PR #1 仍待合入 |
 | Skill / MQTT / 米家 / 小程序 | 部分完成 | 09-12 吸顶灯开/关各 10/10 + HA 回读通过；板载 LED 10/10；Skill 列表可读；小程序手机全链路与视频仍待 |
@@ -73,7 +73,7 @@
 最终记录：
 
 - 默认分支：`dev-ai-contest-2026`（2026-08-30 已由 GitHub 公共 API 核实）
-- 2026-09-12 官方远端实查：`dev-ai-contest-2026` 仍为 `961cf680946773cd4c1f41b29c425de892bd9a69`（模板；不得作为最终提交）；PR #1 `open`、`merged=false`，head `73baee3026d2ce13cfbf4e180a84f59ce5886cd5`；`cla/signature` Required 未上报，statuses 空、check-runs=0、Actions runs=0；已评论 `/check-cla`；Rebase and merge 灰掉；待组委/Actions。
+- 2026-09-14 官方远端：`dev-ai-contest-2026` HEAD `1b412343b51d641e224585d49d5939aeed8d2cd1`（PR #2 rebase 合入）；parent 基线 `961cf68`；作者邮箱 `2760216167@qq.com`；LICENSE 与 09-12 证据已在官方分支可见。
 - 最终 commit SHA：`________________________________________`
 - 已合并 PR：`__________`
 - CLA/CI 状态：`__________`
