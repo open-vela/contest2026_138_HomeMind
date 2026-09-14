@@ -12,6 +12,7 @@ AI_AGENT_OVERLAY="$PROJECT_ROOT/firmware/ai_agent_overlay"
 NUTTX_PATCH="$PROJECT_ROOT/firmware/patches/0001-homemind-esp32s3-nuttx.patch"
 NUTTX_MEDIA_PATCH="$PROJECT_ROOT/firmware/patches/0002-homemind-esp32s3-eye-media.patch"
 NUTTX_MEDIA_REPAIR_PATCH="$PROJECT_ROOT/firmware/patches/0003-repair-eye-bringup-media-placement.patch"
+NUTTX_I2S_PATCH="$PROJECT_ROOT/firmware/patches/0004-homemind-esp32s3-i2s-audio-buffer-info.patch"
 NUTTX_MEDIA_SOURCE="$PROJECT_ROOT/firmware/nuttx_media/esp32s3_board_camera.c"
 NUTTX_MEDIA_DEST="$OPENVELA_ROOT/nuttx/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_board_camera.c"
 

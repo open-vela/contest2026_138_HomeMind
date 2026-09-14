@@ -186,8 +186,8 @@ static void* network_watch_task(void* arg)
         if (feishu_bot_start() != OK)
             syslog(LOG_WARNING, "[%s] feishu_bot_start failed\n", TAG);
 #endif
-        if (agent_loop_start() != OK)
-            syslog(LOG_WARNING, "[%s] agent_loop_start failed\n", TAG);
+        /* agent_loop already started offline in Phase 5 (cold start).
+         * Do not start a second loop here. */
         if (ws_server_start() != OK)
             syslog(LOG_WARNING, "[%s] ws_server_start failed\n", TAG);
 #ifdef CONFIG_AI_AGENT_NODE
@@ -713,6 +713,18 @@ int ai_agent_main(int argc, char* argv[])
         syslog(LOG_WARNING, "[%s] Failed to start network_watch thread\n", TAG);
     }
     BOOT_LOG(&t0, "P5", "network_watch thread started (async)");
+
+    /* ── Cold start: local agent_loop without network ────────────
+     * Local tools (LED/device/vision/wake/kws_listen) and queued asks
+     * are processed immediately. LLM calls fail fast offline; network
+     * channels (mqtt/weixin/ws) still start after Wi-Fi connects. */
+    {
+        int rc = agent_loop_start();
+        BOOT_LOG_RC(&t0, "P5", "agent_loop_start(offline)", rc);
+        syslog(LOG_INFO,
+               "[%s] Cold-start offline agent_loop ready (local tools OK)\n",
+               TAG);
+    }
 
     /* ── Phase 6: CLI thread — all services now in known state ── */
     {

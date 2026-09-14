@@ -31,6 +31,18 @@ MAX_AUDIO_BYTES = 320 * 1024   # 16k/16bit/mono 约 10 秒
 MAX_TEXT = 300
 
 
+def _privacy_mode() -> bool:
+    return os.getenv("PRIVACY_MODE", "1") not in ("0", "false", "False", "")
+
+
+def _deny_raw_media():
+    if _privacy_mode():
+        raise HTTPException(
+            status_code=403,
+            detail="privacy mode: raw audio/video outbound denied")
+
+
+
 def _media_token() -> str:
     return os.getenv("MEDIA_TOKEN", "")
 
@@ -121,6 +133,7 @@ async def media_frame(request: Request, w: int = 320, h: int = 240,
                       swap: int = 1, q: str = "简要描述这张图片里的内容"):
     _check_device_token(request)
     _rate_limit("frame")
+    _deny_raw_media()
     raw = await request.body()
     if not (w and h and 0 < w * h * 2 <= MAX_FRAME_BYTES):
         raise HTTPException(status_code=400, detail="bad frame size")
@@ -149,6 +162,7 @@ def _pcm_to_wav(pcm: bytes, rate: int) -> bytes:
 async def media_audio(request: Request, rate: int = 16000, q: str = ""):
     _check_device_token(request)
     _rate_limit("audio")
+    _deny_raw_media()
     raw = await request.body()
     if not (8000 <= rate <= 48000 and 0 < len(raw) <= MAX_AUDIO_BYTES):
         raise HTTPException(status_code=400, detail="bad audio size/rate")

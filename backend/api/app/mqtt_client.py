@@ -73,6 +73,9 @@ def on_connect(cli, userdata, flags, rc):
     logger.info("mqtt connected rc=%s", rc)
     cli.subscribe("device/+/ack")
     cli.subscribe("device/+/status")
+    cli.subscribe("device/+/event")
+    cli.subscribe("homemind")
+    cli.subscribe("device/+/intent")
     if settings.RELAY_MODE:
         cli.subscribe(TOPIC_RELAY_RESP)
         logger.info("relay 模式：已订阅 %s", TOPIC_RELAY_RESP)
@@ -88,6 +91,41 @@ def on_message(cli, userdata, msg):
     if topic == TOPIC_RELAY_RESP:
         if _handle_relay_resp is not None:
             _handle_relay_resp(payload)
+        return
+    # 端侧意图文本：homemind {"type":"intent","text":"..."} 或 device/<id>/intent
+    _is_intent = (
+        (topic.startswith("device/") and topic.endswith("/intent"))
+        or (isinstance(payload, dict) and payload.get("type") == "intent")
+    )
+    if _is_intent:
+        device_id = "esp32s3-eye"
+        if topic.count("/") == 2 and topic.startswith("device/"):
+            device_id = topic.split("/")[1]
+        if isinstance(payload, dict) and payload.get("device_id"):
+            device_id = str(payload.get("device_id"))
+        text = ""
+        if isinstance(payload, dict):
+            text = str(payload.get("text") or payload.get("intent") or "")
+        try:
+            from .agent_plan import execute_plan, persist_plan, plan_text
+            plan = plan_text(text, use_llm=True)
+            persist_plan("home-system", plan, device_id)
+            if plan.get("actions"):
+                execute_plan(plan, device_id=device_id)
+            logger.info("intent planned type=%s src=%s actions=%d",
+                        plan.get("intent_type"), plan.get("source"),
+                        len(plan.get("actions") or []))
+        except Exception as _e:
+            logger.warning("intent mqtt failed: %s", _e)
+        return
+    # 感知事件：device/<id>/event 或兼容 topic homemind
+    if topic == "homemind" or (topic.startswith("device/") and topic.endswith("/event")):
+        device_id = topic.split("/")[1] if topic.count("/") == 2 else "esp32s3-eye"
+        try:
+            from .perception import ingest_event
+            ingest_event(device_id, payload if isinstance(payload, dict) else {})
+        except Exception as _e:
+            logger.warning("perception ingest failed: %s", _e)
         return
     parts = topic.split("/")
     if len(parts) != 3:
