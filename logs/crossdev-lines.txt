@@ -1,0 +1,45 @@
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:25:#  CROSSDEV         The GNU toolchain triple (command prefix)
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:33:  CROSSDEV = xt-
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:37:  CROSSDEV = xt-
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:41:  CROSSDEV = xtensa-$(CONFIG_ARCH_CHIP)-elf-
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:193:  CC = $(CROSSDEV)xcc
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:194:  CXX = $(CROSSDEV)xc++
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:195:  CPP = $(CROSSDEV)xcc -E -P -x c
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:199:  CC = $(CROSSDEV)clang
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:200:  CXX = $(CROSSDEV)clang++
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:201:  CPP = $(CROSSDEV)clang -E -P -x c
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:203:  CC = $(CROSSDEV)gcc
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:204:  CXX = $(CROSSDEV)g++
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:205:  CPP = $(CROSSDEV)gcc -E -P -x c
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:208:LD = $(CROSSDEV)ld
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:209:STRIP = $(CROSSDEV)strip --strip-unneeded
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:210:AR = $(CROSSDEV)ar rcs
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:211:NM = $(CROSSDEV)nm
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:212:OBJCOPY = $(CROSSDEV)objcopy
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:213:OBJDUMP = $(CROSSDEV)objdump
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:25:#  CROSSDEV         The GNU toolchain triple (command prefix)
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:33:  CROSSDEV = xt-
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:37:  CROSSDEV = xt-
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:41:  CROSSDEV = xtensa-esp32-elf-
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:188:  CC = $(CROSSDEV)xcc
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:189:  CXX = $(CROSSDEV)xc++
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:190:  CPP = $(CROSSDEV)xcc -E -P -x c
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:194:  CC = $(CROSSDEV)clang
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:195:  CXX = $(CROSSDEV)clang++
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:196:  CPP = $(CROSSDEV)clang -E -P -x c
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:198:  CC = $(CROSSDEV)gcc
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:199:  CXX = $(CROSSDEV)g++
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:200:  CPP = $(CROSSDEV)gcc -E -P -x c
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:203:LD = $(CROSSDEV)ld
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:204:STRIP = $(CROSSDEV)strip --strip-unneeded
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:205:AR = $(CROSSDEV)ar rcs
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:206:NM = $(CROSSDEV)nm
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:207:OBJCOPY = $(CROSSDEV)objcopy
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:208:OBJDUMP = $(CROSSDEV)objdump
+nuttx/tools/mkexport.sh:243:echo "CROSSDEV         = ${CROSSDEV}" >>"${EXPORTDIR}/scripts/Make.defs"
+nuttx/tools/mkexport.sh:287:echo "set(CROSSDEV            \"${CROSSDEV}\")"         >>"${EXPORTDIR}/scripts/target.cmake"
+nuttx/tools/define.sh:95:#   $(CROSSDEV)gcc              -D<def1> -D<def2> -D<def3> ...
+nuttx/tools/incdir.sh:99:#   $(CROSSDEV)gcc              -I<dir1> -I<dir2> -I<dir3> ...
+nuttx/tools/incdir.c:329:   *   $(CROSSDEV)gcc              -I<dir1> -I<dir2> -I<dir3> ...
+nuttx/tools/Export.mk:54:	@echo "CROSSDEV=\"$(CROSSDEV)\"" >> $(EXPORTDIR)/makeinfo.sh
+nuttx/tools/mkallsyms.sh:26:usage="Usage: $0 [noconst] <ELFBIN> <CROSSDEV>"

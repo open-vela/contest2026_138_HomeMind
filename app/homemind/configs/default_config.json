@@ -1,0 +1,86 @@
+﻿{
+  "app": {
+    "name": "HomeMind",
+    "version": "1.0.0",
+    "description": "端云协同的家庭感知中枢"
+  },
+  "device": {
+    "id": "esp32s3_eye_001",
+    "name": "HomeMind Hub",
+    "type": "gateway",
+    "location": "living_room"
+  },
+  "network": {
+    "wifi": {
+      "ssid": "",
+      "password": "",
+      "auto_connect": true
+    },
+    "mqtt": {
+      "broker": "192.168.1.100",
+      "port": 1883,
+      "username": "",
+      "password": "",
+      "client_id": "homemind_001"
+    },
+    "api": {
+      "base_url": "http://192.168.1.100:8000",
+      "timeout": 10000
+    }
+  },
+  "ai": {
+    "provider": "mimo",
+    "api_key": "",
+    "model": "mimo-v2.5",
+    "max_tokens": 1000
+  },
+  "privacy": {
+    "level": 2,
+    "mode": "privacy_first",
+    "encryption_enabled": true,
+    "data_retention_days": 30,
+    "auto_delete_enabled": true
+  },
+  "sensors": {
+    "camera": {
+      "enabled": true,
+      "resolution": "VGA",
+      "fps": 15
+    },
+    "microphone": {
+      "enabled": true,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    "temperature": {
+      "enabled": true,
+      "interval": 60
+    },
+    "humidity": {
+      "enabled": true,
+      "interval": 60
+    },
+    "light": {
+      "enabled": true,
+      "interval": 60
+    },
+    "noise": {
+      "enabled": true,
+      "interval": 60
+    }
+  },
+  "features": {
+    "voice_wakeup": true,
+    "face_detection": true,
+    "gesture_recognition": true,
+    "device_control": true,
+    "calendar_management": true,
+    "security_monitoring": true
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "/data/homemind.log",
+    "max_size": 10485760,
+    "backup_count": 5
+  }
+}

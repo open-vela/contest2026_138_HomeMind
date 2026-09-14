@@ -1,0 +1,1 @@
+prebuilts/gcc/linux-x86_64/xtensa-esp32s3-elf/bin/xtensa-esp32s3-elf-gcc

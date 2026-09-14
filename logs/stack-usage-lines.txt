@@ -1,0 +1,38 @@
+nuttx/arch/tricore/src/common/ToolchainGnuc.defs:57:ifneq ($(CONFIG_STACK_USAGE_WARNING),0)
+nuttx/arch/tricore/src/common/ToolchainGnuc.defs:58:  ARCHOPTIMIZATION += -Wstack-usage=$(CONFIG_STACK_USAGE_WARNING)
+nuttx/arch/risc-v/src/common/Toolchain.defs:80:ifneq ($(CONFIG_STACK_USAGE_WARNING),0)
+nuttx/arch/risc-v/src/common/Toolchain.defs:81:  ARCHOPTIMIZATION += -Wstack-usage=$(CONFIG_STACK_USAGE_WARNING)
+nuttx/arch/risc-v/src/cmake/Toolchain.cmake:153:if(${CONFIG_STACK_USAGE_WARNING})
+nuttx/arch/risc-v/src/cmake/Toolchain.cmake:154:  if(NOT ${CONFIG_STACK_USAGE_WARNING} STREQUAL 0)
+nuttx/arch/risc-v/src/cmake/Toolchain.cmake:155:    add_compile_options(-Wstack-usage=${CONFIG_STACK_USAGE_WARNING})
+nuttx/arch/xtensa/src/cmake/Toolchain.cmake:152:if(${CONFIG_STACK_USAGE_WARNING})
+nuttx/arch/xtensa/src/cmake/Toolchain.cmake:153:  if(NOT ${CONFIG_STACK_USAGE_WARNING} STREQUAL 0)
+nuttx/arch/xtensa/src/cmake/Toolchain.cmake:154:    add_compile_options(-Wstack-usage=${CONFIG_STACK_USAGE_WARNING})
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:108:ifneq ($(CONFIG_STACK_USAGE_WARNING),0)
+nuttx/arch/xtensa/src/lx7/Toolchain.defs:109:  ARCHOPTIMIZATION += -Wstack-usage=$(CONFIG_STACK_USAGE_WARNING)
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:104:ifneq ($(CONFIG_STACK_USAGE_WARNING),0)
+nuttx/arch/xtensa/src/lx6/Toolchain.defs:105:  ARCHOPTIMIZATION += -Wstack-usage=$(CONFIG_STACK_USAGE_WARNING)
+nuttx/arch/arm/src/common/Toolchain.defs:71:ifneq ($(CONFIG_STACK_USAGE_WARNING),0)
+nuttx/arch/arm/src/common/Toolchain.defs:72:  ARCHOPTIMIZATION += -Wstack-usage=$(CONFIG_STACK_USAGE_WARNING)
+nuttx/arch/arm/src/cmake/clang.cmake:98:if(CONFIG_STACK_USAGE_WARNING AND NOT "${CONFIG_STACK_USAGE_WARNING}" STREQUAL
+nuttx/arch/arm/src/cmake/clang.cmake:100:  add_compile_options(-Wstack-usage=${CONFIG_STACK_USAGE_WARNING})
+nuttx/arch/arm/src/cmake/ghs.cmake:92:if(CONFIG_STACK_USAGE_WARNING AND NOT "${CONFIG_STACK_USAGE_WARNING}" STREQUAL
+nuttx/arch/arm/src/cmake/ghs.cmake:94:  add_compile_options(-Wstack-usage=${CONFIG_STACK_USAGE_WARNING})
+nuttx/arch/arm/src/cmake/armclang.cmake:116:if(CONFIG_STACK_USAGE_WARNING AND NOT "${CONFIG_STACK_USAGE_WARNING}" STREQUAL
+nuttx/arch/arm/src/cmake/armclang.cmake:118:  add_compile_options(-Wstack-usage=${CONFIG_STACK_USAGE_WARNING})
+nuttx/arch/arm/src/cmake/gcc.cmake:133:if(CONFIG_STACK_USAGE_WARNING AND NOT "${CONFIG_STACK_USAGE_WARNING}" STREQUAL
+nuttx/arch/arm/src/cmake/gcc.cmake:135:  add_compile_options(-Wstack-usage=${CONFIG_STACK_USAGE_WARNING})
+nuttx/arch/arm64/src/cmake/clang.cmake:70:if(CONFIG_STACK_USAGE_WARNING)
+nuttx/arch/arm64/src/cmake/clang.cmake:71:  add_compile_options(-Wstack-usage=${CONFIG_STACK_USAGE_WARNING})
+nuttx/arch/arm64/src/cmake/armclang.cmake:115:if(CONFIG_STACK_USAGE_WARNING AND NOT "${CONFIG_STACK_USAGE_WARNING}" STREQUAL
+nuttx/arch/arm64/src/cmake/armclang.cmake:117:  add_compile_options(-Wstack-usage=${CONFIG_STACK_USAGE_WARNING})
+nuttx/arch/x86_64/src/common/Toolchain.defs:70:ifneq ($(CONFIG_STACK_USAGE_WARNING),0)
+nuttx/arch/x86_64/src/common/Toolchain.defs:71:  ARCHOPTIMIZATION += -Wstack-usage=$(CONFIG_STACK_USAGE_WARNING)
+nuttx/arch/x86_64/src/cmake/Toolchain.cmake:99:if(${CONFIG_STACK_USAGE_WARNING})
+nuttx/arch/x86_64/src/cmake/Toolchain.cmake:100:  if(NOT ${CONFIG_STACK_USAGE_WARNING} STREQUAL 0)
+nuttx/arch/x86_64/src/cmake/Toolchain.cmake:101:    add_compile_options(-Wstack-usage=${CONFIG_STACK_USAGE_WARNING})
+nuttx/arch/sim/src/cmake/Toolchain.cmake:118:if(CONFIG_STACK_USAGE_WARNING)
+nuttx/arch/sim/src/cmake/Toolchain.cmake:119:  add_compile_options(-Wstack-usage=${CONFIG_STACK_USAGE_WARNING})
+nuttx/Kconfig:2612:config STACK_USAGE_WARNING
+nuttx/boards/sim/sim/sim/scripts/Make.defs:73:ifneq ($(CONFIG_STACK_USAGE_WARNING),0)
+nuttx/boards/sim/sim/sim/scripts/Make.defs:74:  ARCHOPTIMIZATION += -Wstack-usage=$(CONFIG_STACK_USAGE_WARNING)

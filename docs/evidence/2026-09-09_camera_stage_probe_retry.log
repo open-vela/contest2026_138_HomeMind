@@ -1,0 +1,45 @@
+M-WIFI] ifup_post_scan ret=0
+[HM-WIFI] mode ret=0
+[HM-WIFI] wpa_version ret=0
+[HM-WIFI] cipher ret=0
+[HM-WIFI] psk ret=0
+[HM-WIFI] essid_pre_ap try=1 ret=0
+[HM-WIFI] ap try=1 ret=0
+[HM-WIFI] essid ret=0 (try 1)
+[HM-IOB] available before DHCP: 64
+[HM-DHCP] renew task ret=0
+[HM-WIFI] renew ret=0
+### SEND ''
+
+vela> 
+vela> ### SEND 'ai_agent'
+ai_agent
+Unknown command: ai_agent (type 'help')
+vela> 
+vela> ### SEND 'net_status'
+net_status
+Network connected: yes
+IP: 192.168.31.252
+vela> 
+vela> ### BASELINE_ATTEMPT 1
+PING 192.168.31.252 (192.168.31.252) 56(84) bytes of data.
+64 bytes from 192.168.31.252: icmp_seq=1 ttl=64 time=111 ms
+64 bytes from 192.168.31.252: icmp_seq=2 ttl=64 time=18.1 ms
+
+--- 192.168.31.252 ping statistics ---
+3 packets transmitted, 2 received, 33.3333% packet loss, time 2003ms
+rtt min/avg/max/mdev = 18.080/64.549/111.019/46.469 ms
+
+### SEND 'media_probe'
+media_probe
+MEDIA_PROBE_BEGIN video=/dev/video0 audio=/dev/audio/pcm_in0
+MEDIA_VIDEO_STAGE open_enter
+[CAM-OPEN] mutex_enter### SEND 'heap_info'
+### PING_DURING
+PING 192.168.31.252 (192.168.31.252) 56(84) bytes of data.
+
+--- 192.168.31.252 ping statistics ---
+24 packets transmitted, 0 received, 100% packet loss, time 11774ms
+
+
+### ALIVE_HEAP no

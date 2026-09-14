@@ -1,0 +1,47 @@
+HomeMind public endpoint probe — 2026-09-02
+
+Scope
+- Read-only probe from the Windows development host; no cloud files or DNS records were changed.
+- Hostname: hfy-ai.cloud
+
+Observed
+- DNS A record resolves to 106.53.25.19.
+- TCP connectivity tests to ports 80, 443, and 8883 succeeded.
+- `http://hfy-ai.cloud/v1/health` returned `302` with a Location pointing to
+  Tencent DNSPod's `static/webblock.html` page for this domain.
+- `https://hfy-ai.cloud/v1/health` did not complete TLS; the peer reset the
+  connection before the TLS ServerHello (`curl` error 35).
+
+Interpretation
+- DNS and basic TCP reachability are present, but the HTTP request is being
+  intercepted by the domain-block page instead of reaching HomeMind Nginx.
+- Consequently FastAPI `/v1/health`, WSS on `/v1/ws`, and WeChat real-device
+  requests cannot be accepted through this hostname yet. This is not an
+  application JSON or WebSocket framing failure.
+- Completing ICP filing/activation and removing the provider block is required
+  before application-layer debugging can be meaningful. After that, verify the
+  public cloud security group, Nginx 443 listener, certificate chain, and
+  reverse proxy upstream separately.
+
+Required external action
+- Use the public-cloud/DNS provider console or public-cloud SSH authority to
+  complete/activate the filing and inspect the 80/443 listener and certificate.
+  The current private Ubuntu host does not control the public endpoint.
+
+2026-09-03 continuation (read-only)
+- The filing/provider gate changed during this work session. DNS still resolves
+  `hfy-ai.cloud` to `106.53.25.19`, but HTTP now returns an nginx `301` to HTTPS
+  instead of the prior DNSPod webblock.
+- `https://hfy-ai.cloud/v1/health` completed normal certificate validation and
+  returned `200` with `{"status":"ok","service":"homemind-c1"}`.
+- `https://hfy-ai.cloud/openapi.json` returned `200` and exposed the expected
+  FastAPI routes, including device commands and `/v1/ws/app`.
+- Unauthenticated `GET /v1/devices` returned the expected `401 missing token`.
+  Empty-code `POST /v1/auth/wechat/login` returned the expected `400 code required`.
+- A valid-shape WebSocket upgrade request to
+  `/v1/ws/app?token=invalid` reached nginx/FastAPI and returned `403`; this proves
+  the WSS ingress and auth gate are reachable, not that a real WeChat token or
+  WSS message exchange has passed.
+- Remaining external gate: obtain a real `wx.login` code from the configured AppID
+  in WeChat developer tools, then verify login, binding, command state, WSS push,
+  and failure replay on a real device. No cloud files were changed here.

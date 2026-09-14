@@ -1,0 +1,46 @@
+# Local Python environments and caches
+.venv/
+.venv-*/
+.venv-tools/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Local build output (release artifacts under artifacts/ are intentional)
+build/
+out/
+cmake_out/
+*.o
+*.a
+*.hex
+*.map
+
+# Local runtime data
+server/data/
+server/logs/
+server/mqtt/data/
+server/mqtt/log/
+backend/data/
+backend/logs/
+
+# Credentials and machine-local configuration
+.env
+.env.*
+!.env.example
+wifi.json
+credentials*.json
+*.pem
+*.key
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*~
+*.swp
+
+# Migration packages
+HomeMind-ubuntu-migration-*.tar.gz
+HomeMind-ubuntu-migration-*.tar.gz.sha256

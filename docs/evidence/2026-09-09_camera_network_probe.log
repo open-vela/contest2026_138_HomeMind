@@ -1,0 +1,65 @@
+
+COMMAND 'net_status'
+net_status
+Network connected: yes
+IP: 192.168.31.252
+vela> 
+vela> 
+BASELINE PING 192.168.31.252 (192.168.31.252) 56(84) bytes of data.
+64 bytes from 192.168.31.252: icmp_seq=1 ttl=64 time=7.51 ms
+64 bytes from 192.168.31.252: icmp_seq=2 ttl=64 time=6.97 ms
+64 bytes from 192.168.31.252: icmp_seq=3 ttl=64 time=4.24 ms
+
+--- 192.168.31.252 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2003ms
+rtt min/avg/max/mdev = 4.236/6.237/7.507/1.432 ms
+
+COMMAND 'media_probe'
+media_probe
+MEDIA_PROBE_BEGIN video=/dev/video0 audio=/dev/audio/pcm_in0
+
+COMMAND 'heap_info'
+
+DURING PING 192.168.31.252 (192.168.31.252) 56(84) bytes of data.
+From 192.168.31.251 icmp_seq=13 Destination Host Unreachable
+From 192.168.31.251 icmp_seq=14 Destination Host Unreachable
+From 192.168.31.251 icmp_seq=15 Destination Host Unreachable
+From 192.168.31.251 icmp_seq=16 Destination Host Unreachable
+From 192.168.31.251 icmp_seq=17 Destination Host Unreachable
+From 192.168.31.251 icmp_seq=18 Destination Host Unreachable
+
+--- 192.168.31.252 ping statistics ---
+20 packets transmitted, 0 received, +6 errors, 100% packet loss, time 9723ms
+pipe 7
+
+RECOVERY_RESET_RC 0
+COMMAND ''
+
+nsh> [K[CLI] thread stack=0x3fcabe50
+vela> [HM-WIFI] ifup ret=0
+
+nsh> [K
+nsh> [K[HM-WIFI] Selected strongest AP 50:88:11:7a:02:69 (-56 dBm)
+[HM-WIFI] ifdown_post_scan ret=0
+
+COMMAND 'ai_agent'
+ai_agent
+
+vela> [HM-WIFI] ifup_post_scan ret=0
+[CLI] thread stack=0x3fcabe50
+vela> 
+COMMAND 'heap_info'
+heap_info
+Heap: arena=8525536 fordblks(free)=6873848 uordblks(used)=1651688
+vela> 
+vela> 
+COMMAND 'net_status'
+net_status
+Network connected: no
+IP: 0.0.0.0
+vela> 
+vela> [HM-WIFI] mode ret=0
+
+
+
+active

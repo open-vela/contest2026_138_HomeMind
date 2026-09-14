@@ -1,0 +1,107 @@
+<!-- pages/settings/settings.wxml -->
+<view class="container">
+  <!-- 通知设置 -->
+  <view class="card">
+    <view class="card-title">通知设置</view>
+    <view class="setting-item">
+      <view class="setting-info">
+        <view class="setting-name">消息通知</view>
+        <view class="setting-desc">未接入；当前不会推送设备或日程通知</view>
+      </view>
+      <view class="config-value">未接入</view>
+    </view>
+  </view>
+
+  <!-- 隐私设置 -->
+  <view class="card">
+    <view class="card-title">隐私设置</view>
+    <view class="setting-item">
+      <view class="setting-info">
+        <view class="setting-name">隐私模式</view>
+        <view class="setting-desc">未接入；当前设备控制需连接 HomeMind 服务端</view>
+      </view>
+      <view class="config-value">未接入</view>
+    </view>
+  </view>
+
+  <!-- 账号（C1 微信登录） -->
+  <view class="card">
+    <view class="card-title">账号</view>
+    <view class="setting-item">
+      <view class="setting-info">
+        <view class="setting-name">微信登录</view>
+        <view class="setting-desc">{{loggedIn ? '已登录：' + userId : '未登录，设备页将自动登录'}}</view>
+      </view>
+      <view class="action-btn {{loggedIn ? 'disabled' : ''}}" bindtap="doLogin" wx:if="{{!loggedIn}}">登录</view>
+      <view class="status-dot online" wx:else></view>
+    </view>
+  </view>
+
+  <!-- 连接设置 -->
+  <view class="card">
+    <view class="card-title">连接设置</view>
+    <view class="setting-item">
+      <view class="setting-info">
+        <view class="setting-name">自动连接</view>
+        <view class="setting-desc">进入首页或设备页时固定查询服务端，暂不支持关闭</view>
+      </view>
+      <view class="config-value">固定开启</view>
+    </view>
+  </view>
+
+  <!-- 服务器配置 -->
+  <view class="card">
+    <view class="card-title">服务器配置</view>
+    <view class="config-item">
+      <view class="config-label">API 服务器</view>
+      <input class="config-input" placeholder="请输入服务器地址" value="{{serverUrl}}" bindblur="onServerUrlChange" />
+    </view>
+    <view class="config-item">
+      <view class="config-label">设备 ID</view>
+      <view class="config-value">{{deviceId}}</view>
+    </view>
+  </view>
+
+  <!-- 数据管理 -->
+  <view class="card">
+    <view class="card-title">数据管理</view>
+    <view class="action-item" bindtap="exportData">
+      <view class="action-info">
+        <view class="action-icon">📤</view>
+        <view class="action-name">导出数据</view>
+      </view>
+      <view class="action-arrow">></view>
+    </view>
+    <view class="action-item" bindtap="clearData">
+      <view class="action-info">
+        <view class="action-icon">🗑️</view>
+        <view class="action-name">清除数据</view>
+      </view>
+      <view class="action-arrow">></view>
+    </view>
+  </view>
+
+  <!-- 其他 -->
+  <view class="card">
+    <view class="card-title">其他</view>
+    <view class="action-item" bindtap="showAbout">
+      <view class="action-info">
+        <view class="action-icon">ℹ️</view>
+        <view class="action-name">关于</view>
+      </view>
+      <view class="action-arrow">></view>
+    </view>
+    <view class="action-item" bindtap="showHelp">
+      <view class="action-info">
+        <view class="action-icon">❓</view>
+        <view class="action-name">使用帮助</view>
+      </view>
+      <view class="action-arrow">></view>
+    </view>
+  </view>
+
+  <!-- 版本信息 -->
+  <view class="version-info">
+    <text>HomeMind v{{version}}</text>
+  </view>
+</view>

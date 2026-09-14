@@ -1,0 +1,74 @@
+<!-- pages/index/index.wxml -->
+<view class="container">
+  <!-- 状态卡片 -->
+  <view class="card status-card">
+    <view class="flex-row" style="justify-content: space-between;">
+      <view>
+        <view class="card-title">HomeMind 状态</view>
+        <view class="flex-row mt-10">
+          <view class="status-dot {{status === '在线' ? 'status-online' : 'status-offline'}}"></view>
+          <text class="ml-10">{{status}}</text>
+        </view>
+      </view>
+      <view class="text-right">
+        <view class="temperature">环境数据 --</view>
+        <view class="humidity">传感器未接入</view>
+      </view>
+    </view>
+    <view class="last-update mt-20">最后更新: {{lastUpdate}}</view>
+  </view>
+
+  <!-- 快捷操作 -->
+  <view class="card">
+    <view class="card-title">快捷操作</view>
+    <view class="flex-row mt-20" style="justify-content: space-around;">
+      <view class="quick-action" bindtap="goToDashboard">
+        <view class="action-icon">📊</view>
+        <view class="action-text">仪表盘</view>
+      </view>
+      <view class="quick-action" bindtap="goToDevices">
+        <view class="action-icon">📱</view>
+        <view class="action-text">设备管理</view>
+      </view>
+      <view class="quick-action" bindtap="goToCalendar">
+        <view class="action-icon">📅</view>
+        <view class="action-text">日程管理</view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 设备概览 -->
+  <view class="card">
+    <view class="flex-row" style="justify-content: space-between;">
+      <view class="card-title">设备概览</view>
+      <view class="view-all" bindtap="goToDevices">查看全部</view>
+    </view>
+    <view class="device-stats mt-20">
+      <view class="stat-item">
+        <view class="stat-number">{{onlineCount}}</view>
+        <view class="stat-label">在线设备</view>
+      </view>
+      <view class="stat-item">
+        <view class="stat-number">{{totalCount}}</view>
+        <view class="stat-label">总设备数</view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 最近日程 -->
+  <view class="card">
+    <view class="flex-row" style="justify-content: space-between;">
+      <view class="card-title">最近日程</view>
+      <view class="view-all" bindtap="goToCalendar">查看全部</view>
+    </view>
+    <view class="calendar-list mt-20">
+      <view class="calendar-item" wx:for="{{calendarItems}}" wx:key="id">
+        <view class="calendar-time">{{item.time}}</view>
+        <view class="calendar-title">{{item.title}}</view>
+      </view>
+      <view class="empty-state" wx:if="{{calendarItems.length === 0}}">
+        <text>暂无日程安排</text>
+      </view>
+    </view>
+  </view>
+</view>

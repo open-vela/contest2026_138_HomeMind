@@ -1,0 +1,89 @@
+<!-- pages/dashboard/dashboard.wxml -->
+<view class="container">
+  <!-- 传感器数据 -->
+  <view class="card">
+    <view class="card-title">环境数据</view>
+    <view class="empty-state">{{sensorStatus}}</view>
+    <view class="sensor-grid">
+      <view class="sensor-item">
+        <view class="sensor-icon">🌡️</view>
+        <view class="sensor-value">{{sensorData.temperature}}</view>
+        <view class="sensor-label">温度（未接入）</view>
+      </view>
+      <view class="sensor-item">
+        <view class="sensor-icon">💧</view>
+        <view class="sensor-value">{{sensorData.humidity}}</view>
+        <view class="sensor-label">湿度（未接入）</view>
+      </view>
+      <view class="sensor-item">
+        <view class="sensor-icon">☀️</view>
+        <view class="sensor-value">{{sensorData.light}}</view>
+        <view class="sensor-label">光照（未接入）</view>
+      </view>
+      <view class="sensor-item">
+        <view class="sensor-icon">🔊</view>
+        <view class="sensor-value">{{sensorData.noise}}</view>
+        <view class="sensor-label">噪声（未接入）</view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 设备状态 -->
+  <view class="card">
+    <view class="flex-row" style="justify-content: space-between;">
+      <view class="card-title">设备状态</view>
+      <view class="view-all" bindtap="goToDevices">管理</view>
+    </view>
+    <view class="device-stats mt-20">
+      <view class="stat-item">
+        <view class="stat-number online">{{deviceStatus.online}}</view>
+        <view class="stat-label">在线</view>
+      </view>
+      <view class="stat-item">
+        <view class="stat-number offline">{{deviceStatus.offline}}</view>
+        <view class="stat-label">离线</view>
+      </view>
+      <view class="stat-item">
+        <view class="stat-number total">{{deviceStatus.total}}</view>
+        <view class="stat-label">总计</view>
+      </view>
+    </view>
+    <view class="empty-state">{{deviceStatusText}}</view>
+  </view>
+
+  <!-- 告警信息 -->
+  <view class="card">
+    <view class="card-title">告警信息</view>
+    <view class="alert-list" wx:if="{{alerts.length > 0}}">
+      <view class="alert-item" wx:for="{{alerts}}" wx:key="id">
+        <view class="alert-icon {{item.level}}">
+          <text wx:if="{{item.level === 'high'}}">⚠️</text>
+          <text wx:elif="{{item.level === 'medium'}}">🔔</text>
+          <text wx:else>ℹ️</text>
+        </view>
+        <view class="alert-content">
+          <view class="alert-title">{{item.title}}</view>
+          <view class="alert-time">{{item.time}}</view>
+        </view>
+      </view>
+    </view>
+    <view class="empty-state" wx:else>
+      <text>{{alertsStatus}}</text>
+    </view>
+  </view>
+
+  <!-- 快捷操作 -->
+  <view class="card">
+    <view class="card-title">快捷操作</view>
+    <view class="action-grid">
+      <view class="action-item" bindtap="refreshData">
+        <view class="action-icon">🔄</view>
+        <view class="action-text">刷新数据</view>
+      </view>
+      <view class="action-item" bindtap="goToDevices">
+        <view class="action-icon">📱</view>
+        <view class="action-text">设备管理</view>
+      </view>
+    </view>
+  </view>
+</view>

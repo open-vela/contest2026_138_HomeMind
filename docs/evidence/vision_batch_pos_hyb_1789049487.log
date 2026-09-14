@@ -1,0 +1,14 @@
+label=pos_hyb n=10 bin=0764e58f_or_later
+run=1 person=0.537 latency=4160.0 result=DETECTED
+run=2 person=0.515 latency=4160.0 result=DETECTED
+run=3 person=0.482 latency=4160.0 result=DETECTED
+run=4 person=0.431 latency=4160.0 result=DETECTED
+run=5 person=0.465 latency=4160.0 result=DETECTED
+run=6 person=0.486 latency=4160.0 result=DETECTED
+run=7 person=0.523 latency=4160.0 result=DETECTED
+run=8 person=0.327 latency=4160.0 result=none
+run=9 person=0.409 latency=4160.0 result=DETECTED
+run=10 person=0.564 latency=4160.0 result=DETECTED
+score_min=0.327 max=0.564 mean=0.474
+lat_p50=4160.0 p95=4160.0
+ok=10 fail=0 detected=9 none=1

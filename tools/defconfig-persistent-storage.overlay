@@ -1,0 +1,32 @@
+# HomeMind 持久存储 defconfig 覆盖
+# 将这些配置项添加到 esp32s3-eye:ai_agent 的 defconfig 中
+# 用于启用 SPI Flash 上的 LittleFS 持久化分区
+#
+# 使用方法：
+#   1. 在 Ubuntu VM 中执行 menuconfig 或直接追加到 .config
+#   2. 或者创建一个 board overlay defconfig
+#
+# 注意：具体分区表取决于 ESP32-S3-EYE 的 Flash 布局
+# 以下配置假设 Flash 有未使用的空间可用于数据分区
+
+# ── MTD (Memory Technology Device) 驱动 ──
+CONFIG_MTD=y
+CONFIG_MTD_SMART=y
+CONFIG_MTD_SMART_SECTOR_SIZE=4096
+
+# ── LittleFS 文件系统 ──
+CONFIG_FS_LITTLEFS=y
+CONFIG_FS_LITTLEFS_BLOCK_SIZE=4096
+CONFIG_FS_LITTLEFS_CACHE_SIZE=512
+CONFIG_FS_LITTLEFS_LOOKAHEAD_SIZE=128
+
+# ── ESP32-S3 SPI Flash 分区 ──
+# 注意：需要确认 ESP32-S3-EYE 板级是否支持这些配置
+# 如果板级已定义分区表，可能不需要手动配置
+CONFIG_ESP32S3_SPIFLASH=y
+
+# ── 保留 TMPFS 用于 /tmp ──
+CONFIG_FS_TMPFS=y
+
+# ── procfs 用于系统信息 ──
+CONFIG_FS_PROCFS=y
