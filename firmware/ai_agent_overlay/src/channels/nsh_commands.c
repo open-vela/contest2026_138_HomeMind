@@ -586,7 +586,7 @@ static void cmd_vision(int argc, char **argv)
 
 /* ── HomeMind voice：录音 → 云端 ASR → MiMo 问答 → 小爱音箱播报 ── */
 
-#define HM_VOICE_SECONDS 5
+#define HM_VOICE_SECONDS 3
 /* 听到提示音后再开麦的等待；太短会把提示音本身录进去。 */
 #define HM_WAKE_PROMPT_WAIT_MS 2200
 
@@ -710,7 +710,7 @@ static int hm_voice_utterance_roundtrip(void)
         printf("[Voice-ERR]: alloc failed\n");
         return -1;
     }
-    printf("[Voice]: recording ~3s, speak now...\n");
+    printf("[Voice]: recording ~%ds, speak now...\n", HM_VOICE_SECONDS);
     hm_lcd_show_text("SPEAK NOW");
     pcm_len = hm_voice_record(pcm, HM_VOICE_SECONDS * 16000 * 2, 16000);
     if (pcm_len < HM_VOICE_SECONDS * 16000) {
@@ -881,7 +881,10 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
         desc.u.buffer = apb;
         ioctl(fd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
         apb = NULL;
-        if (chunk > 200)
+        /* 上限按目标字节数推导。写死 200 块 = 128000 字节，正好是
+         * 16kHz/16bit 单声道下的 4 秒 —— 一旦要录更久就永远采不满，
+         * 而且失败时没有明显报错（2026-09-15 踩到）。 */
+        if (chunk > (want / bsize) + 40)
             break;
     }
     if (started)
