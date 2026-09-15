@@ -106,6 +106,8 @@ LOCAL_LLM_SYSTEM = """你是 HomeMind 家庭中枢的语义规划器，运行在
 
 规则：
 - 一个意图可以拆成多个动作，按执行顺序排列。
+- text/title 必须填**用户真正想做的具体内容**，绝对不要照抄下面示例里的占位文字。
+- 用户说的是开发板/板载/指示灯，就用 led；说家用灯/吸顶灯/房间灯，才用 xiaoai_execute。
 - 不要执行危险或非家庭操作（如转账、删数据、开门锁），把它们输出为 {"intent_type":"unknown","actions":[],"speak":"这个我做不了"}。
 - speak 要简短自然，不超过 30 个汉字。
 
@@ -115,6 +117,9 @@ LOCAL_LLM_SYSTEM = """你是 HomeMind 家庭中枢的语义规划器，运行在
 
 用户：把灯关了
 输出：{"intent_type":"device.control","actions":[{"type":"xiaoai_execute","text":"关闭多功能房吸顶灯"},{"type":"led","op":"off"}],"speak":"好的，灯已关"}
+
+用户：把开发板上的指示灯打开
+输出：{"intent_type":"device.control","actions":[{"type":"led","op":"on"}],"speak":"好的，板载灯已打开"}
 
 用户：二十分钟后提醒我收衣服
 输出：{"intent_type":"task.create","actions":[{"type":"task","title":"收衣服","minutes":20},{"type":"speak","text":"好的，20分钟后提醒你收衣服"}],"speak":"好的，20分钟后提醒你收衣服"}
@@ -152,6 +157,16 @@ def local_rules(text: str) -> dict:
                 {"type": "scene", "name": "bedtime"},
             ],
             "speak": "好的，开始睡前准备。",
+            "source": "rules",
+        }
+    # 板载指示灯（端侧 LED）：确定性最高，且不触碰家里真实灯具，优先匹配
+    if any(k in t for k in ("指示灯", "板载", "板上的灯", "开发板上的灯")) \
+            or tl in ("led",) or " led" in tl:
+        off = any(k in t for k in ("关", "灭", "关闭", "熄"))
+        return {
+            "intent_type": "device.control",
+            "actions": [{"type": "led", "op": "off" if off else "on"}],
+            "speak": "好的，板载灯已关闭。" if off else "好的，板载灯已打开。",
             "source": "rules",
         }
     if any(k in t for k in ("关灯", "把灯关了", "关闭灯")):
@@ -219,6 +234,25 @@ def _risk_hit(text: str):
     return None
 
 
+# 小模型有时会把系统提示里的 schema 占位文字当成真实内容输出，实测 1.5B 会返回
+# {"type":"xiaoai_execute","text":"对小爱音箱说的中文指令"}。这类模板文字一旦执行，
+# 就会把示例串真的发给小爱或写进待办，必须在执行前拦掉。
+PLACEHOLDER_TEXTS = (
+    "对小爱音箱说的中文指令", "对小爱说的中文指令", "要播报的简短中文",
+    "一句话回复", "待办标题", "待办", "指令", "标题", "text", "title", "...", "…",
+)
+
+_PUNCT = re.compile(r"[\s，。、,.!！?？\"'“”‘’：:；;（）()\[\]【】]")
+
+
+def _is_placeholder(text: str) -> bool:
+    """text 为空或只是系统提示里的占位样例 -> 视为无效内容。"""
+    t = _PUNCT.sub("", str(text or "")).lower()
+    if not t:
+        return True
+    return any(t == _PUNCT.sub("", p).lower() for p in PLACEHOLDER_TEXTS)
+
+
 def sanitize_plan(raw: dict, user_text: str = "") -> dict:
     """过滤非法动作，保证只执行白名单/已知类型；并做风险语义兜底。"""
     # 护栏同时检查"用户原话"和"模型输出"，防止模型把危险意图洗白成合规动作
@@ -262,14 +296,22 @@ def sanitize_plan(raw: dict, user_text: str = "") -> dict:
                 a["minutes"] = max(1, min(int(a.get("minutes", 30)), 24 * 60))
             except Exception:
                 a["minutes"] = 30
-            a["title"] = str(a.get("title") or "待办")[:120]
+            title = str(a.get("title") or "")[:120]
+            if _is_placeholder(title) or title == "待办":
+                rejected.append(f"placeholder_title:{title[:40]}")
+                continue
+            a["title"] = title
         if t == "xiaoai_execute":
             a["text"] = str(a.get("text") or "")[:80]
-            if not a["text"]:
-                rejected.append(str(a)[:120])
+            if _is_placeholder(a["text"]):
+                # 模型照抄了示例文字，不能真的发给小爱
+                rejected.append(f"placeholder_text:{a['text'][:40]}")
                 continue
         if t == "speak":
             a["text"] = str(a.get("text") or "")[:120]
+            if _is_placeholder(a["text"]):
+                rejected.append("placeholder_speak")
+                continue
         actions.append(a)
     return {
         "plan_id": uuid.uuid4().hex,
@@ -339,8 +381,13 @@ def persist_plan(user_id: str, plan: dict, device_id: str) -> dict:
         db.close()
 
 
-def execute_plan(plan: dict, device_id: str = "esp32s3-eye") -> dict:
-    """执行计划：scene / led / xiaoai / speak / task。返回逐项结果。"""
+def execute_plan(plan: dict, device_id: str = "esp32s3-eye",
+                 announce: bool = True) -> dict:
+    """执行计划：scene / led / xiaoai / speak / task。返回逐项结果。
+
+    announce=False 时不调用小爱播报（speak 动作标记为 skipped），用于「端侧自己
+    播报回复」的语音闭环，避免同一条回复被播两遍。
+    """
     results = []
     # 延迟导入避免循环
     from .routers import scenes as scenes_mod
@@ -389,6 +436,10 @@ def execute_plan(plan: dict, device_id: str = "esp32s3-eye") -> dict:
                 results.append({"action": a, "ok": bool(r.get("ok")),
                                 "result": r})
             elif t == "speak":
+                if not announce:
+                    results.append({"action": a, "ok": True,
+                                    "skipped": "announce disabled"})
+                    continue
                 r = xiaoai.say(a.get("text", ""))
                 results.append({"action": a, "ok": bool(r.get("ok")),
                                 "result": r})
@@ -416,8 +467,8 @@ def execute_plan(plan: dict, device_id: str = "esp32s3-eye") -> dict:
             results.append({"action": a, "ok": False, "error": str(e)})
 
     # 顶层 speak（若 actions 里没有 speak）
-    if plan.get("speak") and not any(a.get("type") == "speak"
-                                     for a in plan.get("actions") or []):
+    if announce and plan.get("speak") and not any(
+            a.get("type") == "speak" for a in plan.get("actions") or []):
         try:
             from . import xiaoai
             r = xiaoai.say(plan["speak"])
