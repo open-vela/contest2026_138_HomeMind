@@ -14,6 +14,8 @@ from .ws_hub import init as ws_init, drain
 from .models import Command
 from .routers import (health, auth, devices, commands, media,
                              intents, events, tasks, assets, scenes, xiaoai, agent,
+                             voice as voice_router,
+                             llm_local as llm_local_router,
                              ws as ws_router)
 from .reminder_worker import start_reminder_worker
 from .ha_bridge import start_ha_bridge
@@ -94,4 +96,6 @@ else:
     app.include_router(scenes.router)
 app.include_router(xiaoai.router)
 app.include_router(agent.router)
+app.include_router(voice_router.router)
+app.include_router(llm_local_router.router)
 app.include_router(ws_router.router)

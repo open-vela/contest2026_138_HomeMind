@@ -3,7 +3,8 @@
 - POST /v1/media/frame?w=320&h=240&swap=1&q=提示词  body=RGB565 裸帧
   -> 云端转 JPEG -> MiMo 图像理解 -> {"text": 描述}
 - POST /v1/media/audio?rate=16000  body=16bit 单声道 PCM
-  -> 云端包 WAV 头 -> MiMo 音频理解转写 -> {"text": 转写文本}
+  -> 隐私模式：本机 local_asr 局域网内转写（音频不出家庭）
+     非隐私模式：云端包 WAV 头 -> MiMo 音频理解转写 -> {"text": 转写文本}
 - POST /v1/media/announce  {"device_id":..., "text":...}
   -> MQTT device/<id>/speak -> 家庭网关 -> HA notify -> 小爱音箱播报
 
@@ -21,6 +22,7 @@ import time
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 
+from ..device_auth import check_device_token, rate_limit
 from ..mqtt_client import publish_command
 
 logger = logging.getLogger("media")
@@ -43,33 +45,8 @@ def _deny_raw_media():
 
 
 
-def _media_token() -> str:
-    return os.getenv("MEDIA_TOKEN", "")
-
-
 def _mimo_key() -> str:
     return os.getenv("MIMO_API_KEY", "")
-
-
-def _check_device_token(request: Request) -> None:
-    token = _media_token()
-    if not token:
-        raise HTTPException(status_code=503, detail="media endpoint disabled")
-    auth = request.headers.get("authorization", "")
-    if auth != "Bearer " + token:
-        raise HTTPException(status_code=401, detail="invalid device token")
-
-
-_rate: dict = {}
-
-
-def _rate_limit(key: str, per_minute: int = 10) -> None:
-    now = time.time()
-    window = [t for t in _rate.get(key, []) if now - t < 60]
-    if len(window) >= per_minute:
-        raise HTTPException(status_code=429, detail="rate limited")
-    window.append(now)
-    _rate[key] = window
 
 
 def _mimo_chat(content: list, timeout: float = 60.0) -> str:
@@ -131,8 +108,8 @@ def _rgb565_to_jpeg(raw: bytes, width: int, height: int, swap: bool) -> bytes:
 @router.post("/frame")
 async def media_frame(request: Request, w: int = 320, h: int = 240,
                       swap: int = 1, q: str = "简要描述这张图片里的内容"):
-    _check_device_token(request)
-    _rate_limit("frame")
+    check_device_token(request)
+    rate_limit("frame")
     _deny_raw_media()
     raw = await request.body()
     if not (w and h and 0 < w * h * 2 <= MAX_FRAME_BYTES):
@@ -160,12 +137,30 @@ def _pcm_to_wav(pcm: bytes, rate: int) -> bytes:
 
 @router.post("/audio")
 async def media_audio(request: Request, rate: int = 16000, q: str = ""):
-    _check_device_token(request)
-    _rate_limit("audio")
-    _deny_raw_media()
+    """PCM 转写。
+
+    隐私模式下不再一律 403，而是改由**家庭局域网内的本机 ASR**转写：
+    音频不出家庭网络、不经过任何第三方，因此既守住隐私又能正常服务。
+    本机 ASR 不可用时保持原有 fail-closed 语义（403），不做降级外发。
+    """
+    check_device_token(request)
+    rate_limit("audio")
     raw = await request.body()
     if not (8000 <= rate <= 48000 and 0 < len(raw) <= MAX_AUDIO_BYTES):
         raise HTTPException(status_code=400, detail="bad audio size/rate")
+    if _privacy_mode():
+        from .. import local_asr
+        text = local_asr.transcribe(raw, rate)
+        if text is None:
+            # 没听到人话：返回空文本（不是错误），端侧据此不上报意图
+            if local_asr.enabled():
+                return {"text": "", "engine": "local_asr", "egress": "none",
+                        "reason": "asr_empty"}
+            # 本机 ASR 不可用 -> 维持原语义：拒绝原始音频外发
+            raise HTTPException(
+                status_code=403,
+                detail="privacy mode: raw audio outbound denied")
+        return {"text": text, "engine": "local_asr", "egress": "none"}
     wav_b64 = base64.b64encode(_pcm_to_wav(raw, rate)).decode()
     prompt = (q or "请逐字转写这段音频的中文内容，只输出转写文本，不要任何解释")[:200]
     answer = _mimo_chat([
@@ -178,8 +173,8 @@ async def media_audio(request: Request, rate: int = 16000, q: str = ""):
 
 @router.post("/announce")
 async def media_announce(request: Request):
-    _check_device_token(request)
-    _rate_limit("announce", per_minute=6)
+    check_device_token(request)
+    rate_limit("announce", per_minute=6)
     try:
         payload = json.loads(await request.body())
     except ValueError:

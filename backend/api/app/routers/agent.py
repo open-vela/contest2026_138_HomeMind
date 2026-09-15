@@ -60,11 +60,13 @@ def get_plan(plan_id: str, _u: str = Depends(get_current_user)):
 def agent_health(_u: str = Depends(get_current_user)):
     """语义后端能力自检：私有本地模型 / 外部模型 / 规则回落。"""
     import os
-    from .. import local_llm
+    from .. import local_asr, local_llm
     st = local_llm.status()
     return {
         # 家庭局域网内的本地大模型（默认首选，数据不出家庭）
         "local_llm": st,
+        # 家庭局域网内的本地语音识别（唤醒后语音闭环，音频不出家庭）
+        "local_asr": local_asr.status(),
         # 外部大模型：仅在显式允许出站时启用
         "external_llm_configured": bool(os.getenv("MIMO_API_KEY")),
         "external_llm_allowed": os.getenv(
