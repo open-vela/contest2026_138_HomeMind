@@ -586,7 +586,9 @@ static void cmd_vision(int argc, char **argv)
 
 /* ── HomeMind voice：录音 → 云端 ASR → MiMo 问答 → 小爱音箱播报 ── */
 
-#define HM_VOICE_SECONDS 3
+/* 5 秒：用户习惯把唤醒词和指令连着说，窗口留宽一点更稳。
+ * 2026-09-15 实机验证 5s(160000B) 采集 PASS continuous。 */
+#define HM_VOICE_SECONDS 5
 /* 听到提示音后再开麦的等待；太短会把提示音本身录进去。 */
 #define HM_WAKE_PROMPT_WAIT_MS 2200
 
@@ -818,6 +820,7 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
     int fd;
     int started = 0;
     int chunk = 0;
+    int used = 0;
 
     fd = open(path, O_RDWR | O_NONBLOCK);
     if (fd < 0) {
@@ -868,10 +871,16 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
         if (chunk == 0)
             poll(&pfd, 1, 800);
         else
-            usleep(30000);
+            /* 640B @16kHz/16bit 单声道 = 20ms 音频，所以每块最多只能等 20ms。
+             * NuttX 的 CONFIG_USEC_PER_TICK=10000，usleep 按 tick 向上取整：
+             * 实测 usleep(30000)->每块 39ms、usleep(12000)->每块 29ms，
+             * 即 12000us 实际睡了 2 个 tick(20ms)。因此必须给 1 个 tick，
+             * 否则消费端恒慢于生产端，采到的 PCM 会被丢样点（音频断续）。 */
+            usleep(10000);
         if (apb->nbytes > 0 && got + apb->nbytes <= want) {
             memcpy(dst + got, apb->samp, apb->nbytes);
             got += apb->nbytes;
+            used++;
         }
         chunk++;
         if (chunk <= 4 || chunk % 10 == 0)
@@ -881,10 +890,12 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
         desc.u.buffer = apb;
         ioctl(fd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
         apb = NULL;
-        /* 上限按目标字节数推导。写死 200 块 = 128000 字节，正好是
-         * 16kHz/16bit 单声道下的 4 秒 —— 一旦要录更久就永远采不满，
-         * 而且失败时没有明显报错（2026-09-15 踩到）。 */
-        if (chunk > (want / bsize) + 40)
+        /* 退出条件按"实际拿到多少数据"判断，而不是总块数：空块（生产者
+         * 还没填好）不应该消耗采集预算。历史上写死 `chunk > 200`
+         * （=128000B=4 秒）会让"改录音时长"变成静默失败；改按目标字节数
+         * 推导后又发现空块会提前吃掉预算，所以这里统一用 used。
+         * 绝对上限给 3 倍块数兜底，避免驱动异常时死等。 */
+        if (used >= (want / bsize) || chunk > (want / bsize) * 3 + 60)
             break;
     }
     if (started)
@@ -900,7 +911,7 @@ static void cmd_audio_stream(int argc, char **argv)
     int want;
     int got;
     unsigned char *buf;
-    long sum_sq = 0;
+    long long sum_sq = 0;
     int peak = 0;
     int i;
     double rms;
@@ -920,7 +931,7 @@ static void cmd_audio_stream(int argc, char **argv)
     got = hm_audio_stream_session(buf, want, rate);
     for (i = 0; i + 1 < got; i += 2) {
         int s = (int)(int16_t)(buf[i] | (buf[i + 1] << 8));
-        sum_sq += (long)s * s;
+        sum_sq += (long long)s * (long long)s;
         if (s < 0)
             s = -s;
         if (s > peak)
