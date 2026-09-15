@@ -586,7 +586,9 @@ static void cmd_vision(int argc, char **argv)
 
 /* ── HomeMind voice：录音 → 云端 ASR → MiMo 问答 → 小爱音箱播报 ── */
 
-#define HM_VOICE_SECONDS 3
+#define HM_VOICE_SECONDS 5
+/* 听到提示音后再开麦的等待；太短会把提示音本身录进去。 */
+#define HM_WAKE_PROMPT_WAIT_MS 2200
 
 /* 音频连续采集：2026-09-10 验证过的配方（单次 open + 640B 入队循环）。
  *
@@ -630,6 +632,41 @@ static void hm_json_escape(const char *in, char *out, int cap)
 /* 语音闭环的一次完整往返：录音 -> 家庭私有云本机 ASR + 语义规划 + 执行 ->
  * 小爱播报回复。命令行 `voice` 与 KWS 唤醒后的自动触发共用这一份实现。
  * 返回 0 表示拿到了有效转写（或识别到人说话），-1 表示没听到人话/链路失败。 */
+/* 唤醒提示音：请家庭音箱回一句"我在，请说"。
+ *
+ * 用户习惯把唤醒词和指令连成一句说完，而唤醒判定需要人声之后的一段静音；
+ * 等判定成功，指令已经说完了，端侧再开录音只会录到沉默。先给一个听得见的
+ * 应答，用户才知道该开口——这是让语音闭环稳定的关键一环。
+ * 尽力而为：失败不抛错，后面的录音照常进行。 */
+static void hm_voice_wake_prompt(void)
+{
+    char host[64] = "192.168.31.251";
+    char port[8] = "443";
+    char token[128] = "";
+    char auth[224];
+    static char resp[512];
+    const vela_header_t hdr[] = {
+        { "Content-Type", "application/json" },
+        { "Authorization", auth },
+        { NULL, NULL }
+    };
+    size_t rlen = 0;
+    int status;
+
+    claw_config_get("media_host", host, sizeof(host));
+    claw_config_get("media_port", port, sizeof(port));
+    claw_config_get("media_token", token, sizeof(token));
+    if (!token[0])
+        return;
+
+    snprintf(auth, sizeof(auth), "Bearer %s", token);
+    status = vela_https_request(host, port, "POST",
+                                "/v1/voice/wake?device_id=esp32s3-eye",
+                                hdr, "{}", 2, resp, sizeof(resp), &rlen);
+    printf("[Voice] wake prompt -> %d\n", status);
+    fflush(stdout);
+}
+
 static int hm_voice_utterance_roundtrip(void)
 {
     char host[64] = "192.168.31.251";
@@ -1509,21 +1546,13 @@ static void *kws_listen_worker(void *arg)
                                 g_kws_listen_hits++;
                                 printf("[KWS-L] HIT #%d\n", g_kws_listen_hits);
                                 fflush(stdout);
-                                hm_lcd_show_text("WAKE OK");
-                                hm_led_blink(3, 80, 80);
-                                {
-                                    char ev[160];
-                                    snprintf(ev, sizeof(ev),
-                                             "{\"type\":\"kws_wake\","
-                                             "\"keyword\":\"hello_openvela\","
-                                             "\"score\":%.3f,\"hits\":%d}",
-                                             score, g_kws_listen_hits);
-                                    if (mqtt_channel_send("homemind", ev) == 0)
-                                        printf("[KWS-L] mqtt published\n");
-                                    else
-                                        printf("[KWS-L] mqtt offline\n");
-                                    fflush(stdout);
-                                }
+                                /* 唤醒后尽快把麦克风交给录音：原来的
+                                 * hm_led_blink(3,80,80) 会阻塞约 480ms，
+                                 * 再加上 MQTT 上报，用户刚说出口的指令
+                                 * 很容易被挤掉。这里只做一次极短光脉冲，
+                                 * MQTT 事件挪到录音结束之后再发。 */
+                                hm_lcd_show_text("SPEAK NOW");
+                                hm_led_blink(1, 50, 0);
                                 /* 唤醒即进入语音闭环：让出麦克风 -> 录音 ->
                                  * 家庭私有云本机 ASR + 语义规划 + 执行 ->
                                  * 重新打开麦克风继续监听。
@@ -1543,6 +1572,10 @@ static void *kws_listen_worker(void *arg)
                                      * head/tail 记账错位的风险（见
                                      * hm_voice_record 注释）。 */
                                     usleep(150000);
+                                    /* 先给一句听得见的应答，等它播完再开麦，
+                                     * 用户才知道该开口说指令。 */
+                                    hm_voice_wake_prompt();
+                                    usleep(HM_WAKE_PROMPT_WAIT_MS * 1000);
                                     hm_voice_utterance_roundtrip();
                                     if (kws_listen_open_mic(&fd) != 0) {
                                         printf("[KWS-L] mic reopen failed; "
@@ -1558,6 +1591,22 @@ static void *kws_listen_worker(void *arg)
                                         silence = 0;
                                         hold = 0;
                                     }
+                                }
+                                /* 唤醒事件在录音之后上报：MQTT 断线时
+                                 * mqtt_channel_send 会走连接/超时路径，
+                                 * 放在录音前会吞掉用户的指令。 */
+                                {
+                                    char ev[160];
+                                    snprintf(ev, sizeof(ev),
+                                             "{\"type\":\"kws_wake\","
+                                             "\"keyword\":\"hello_openvela\","
+                                             "\"score\":%.3f,\"hits\":%d}",
+                                             score, g_kws_listen_hits);
+                                    if (mqtt_channel_send("homemind", ev) == 0)
+                                        printf("[KWS-L] mqtt published\n");
+                                    else
+                                        printf("[KWS-L] mqtt offline\n");
+                                    fflush(stdout);
                                 }
                                 hm_lcd_show_text("KWS LISTEN");
                             }

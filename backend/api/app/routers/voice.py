@@ -13,9 +13,9 @@ import logging
 import os
 import time
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
-from .. import local_asr
+from .. import local_asr, xiaoai
 from ..agent_plan import execute_plan, persist_plan, plan_text
 from ..device_auth import check_device_token, rate_limit
 
@@ -58,6 +58,33 @@ async def voice_utterance(request: Request, rate: int = 16000,
                 plan.get("intent_type"), len(plan.get("actions") or []))
     return dict(base, text=text, plan=plan, executed=executed,
                 actions=len(plan.get("actions") or []), result=result)
+
+
+@router.post("/wake")
+async def voice_wake(request: Request, background: BackgroundTasks,
+                     device_id: str = "esp32s3-eye"):
+    """唤醒提示音：端侧检测到唤醒词后调用，让家庭音箱回一句"我在，请说"。
+
+    为什么需要它：用户往往把唤醒词和指令连成一整句说，而唤醒是"人声之后
+    出现静音"才判定成功的——等到判定成功，指令已经被说完，端侧再开录音
+    只能录到沉默（asr_empty）。先给一个听得见的应答，用户才知道该开口。
+
+    提示音是尽力而为：后台播报，立即返回，端侧无论如何都会继续录音。
+    """
+    check_device_token(request)
+    rate_limit("voice_wake",
+               per_minute=int(os.getenv("VOICE_WAKE_RATE_PER_MIN", "30")))
+    prompt = os.getenv("VOICE_WAKE_PROMPT", "我在，请说")
+    background.add_task(_say_safe, prompt)
+    return {"ok": True, "prompt": prompt, "mode": "async"}
+
+
+def _say_safe(text: str) -> None:
+    """后台播报，失败只记日志，绝不影响端侧录音。"""
+    try:
+        xiaoai.say(text)
+    except Exception as exc:            # noqa: BLE001
+        logger.warning("wake prompt failed: %s", exc)
 
 
 @router.get("/health")
