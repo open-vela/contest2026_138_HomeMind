@@ -11,6 +11,7 @@ GET  /v1/voice/health  本地 ASR 能力自检
 """
 import logging
 import os
+import re
 import time
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
@@ -23,6 +24,23 @@ logger = logging.getLogger("voice")
 router = APIRouter(prefix="/v1/voice", tags=["voice"])
 
 MAX_AUDIO_BYTES = 320 * 1024   # 16k/16bit/mono 约 10 秒，够一句家庭指令
+
+# 唤醒词（"你好，openvela"）在 ASR 结果里的各种可能写法。只剥离句首的那一次 ——
+# 端侧把整句（唤醒词 + 指令）一起送上来，规划器只应看到指令部分。
+_WAKE_RE = re.compile(
+    r"^[\s，,。.、!！?？~〜\-]*"
+    r"(?:(?:你好|您好|哈喽|hello|hi|嗨)[\s，,。.、!！]*)?"
+    r"(?:open\s*vela|openvela|欧[朋鹏]维拉|欧[朋鹏]微拉|欧朋伟拉)"
+    r"[\s，,。.、!！?？~〜\-]*",
+    re.IGNORECASE,
+)
+
+
+def strip_wake_word(text: str) -> str:
+    """去掉句首的唤醒词，返回剩下的指令部分（可能为空）。"""
+    if not text:
+        return ""
+    return _WAKE_RE.sub("", text, count=1).strip()
 
 
 @router.post("/utterance")
@@ -37,13 +55,21 @@ async def voice_utterance(request: Request, rate: int = 16000,
         raise HTTPException(status_code=400, detail="bad audio size")
 
     t0 = time.time()
-    text = local_asr.transcribe(raw, rate)
+    heard = local_asr.transcribe(raw, rate) or ""
     asr_ms = int((time.time() - t0) * 1000)
+    # 端侧可能把"唤醒词 + 指令"整句一起送上来（唤醒判定发生在人声之后的静音，
+    # 那时用户已经把整句说完了）。剥掉句首唤醒词；剥完为空说明用户只叫了一声、
+    # 还没讲指令 -> 按 asr_empty 回，端侧会改用"提示音 + 重新录音"再问一次。
+    text = strip_wake_word(heard)
 
     base = {"asr": "local_asr", "asr_ms": asr_ms, "egress": "none"}
     if not text:
         # 没听到有效人话：明确不触发任何控制，也不写入意图历史
-        return dict(base, text="", reason="asr_empty", executed=False,
+        reason = "wake_only" if heard else "asr_empty"
+        if reason == "wake_only":
+            logger.info("voice utterance dev=%s wake word only, no command",
+                        device_id)
+        return dict(base, text="", reason=reason, executed=False,
                     actions=0, plan=None)
 
     plan = plan_text(text, use_llm=True)
@@ -53,9 +79,10 @@ async def voice_utterance(request: Request, rate: int = 16000,
     if execute and plan.get("actions"):
         result = execute_plan(plan, device_id=device_id or "esp32s3-eye")
         executed = True
-    logger.info("voice utterance dev=%s asr_ms=%d src=%s type=%s actions=%d",
+    logger.info("voice utterance dev=%s asr_ms=%d src=%s type=%s "
+                "actions=%d text=%s",
                 device_id, asr_ms, plan.get("source"),
-                plan.get("intent_type"), len(plan.get("actions") or []))
+                plan.get("intent_type"), len(plan.get("actions") or []), text)
     return dict(base, text=text, plan=plan, executed=executed,
                 actions=len(plan.get("actions") or []), result=result)
 
