@@ -203,7 +203,22 @@ INFO:     127.0.0.1:48204 - "POST /v1/voice/utterance?rate=16000&device_id=esp32
 [Voice]: recording ~5s, speak now...
 ```
 
-同时录音窗口由 3s 放宽到 5s（`HM_VOICE_SECONDS`），减少长指令被截断的概率。
+录音窗口**最终保持 3s**（`HM_VOICE_SECONDS`）。中间曾试过放宽到 5s，
+但真机上出现「`/v1/voice/wake` 通了、随后的 `/v1/voice/utterance` 却没出现」：
+
+- 采集循环 `hm_audio_stream_session()` 里有写死的 `if (chunk > 200) break;`，
+  每块 640B → **128000B**，正好是 16kHz/16bit 单声道下的 **4 秒**；
+  3 秒（96000B）一直在安全区内，所以这条上限从未暴露。
+- 对照实验（干净单消费者）：`audio_stream 2`（64000B）→ `PASS continuous`；
+  `audio_stream 5`（160000B）→ **完全没有输出**。
+- 进一步复测显示 160000B 这个量级会**把音频缓冲池耗光、整机失去响应**
+  （RTS 软复位救不回来，需重新用 esptool 握手才恢复），所以真实瓶颈是
+  **内存余量**，不是循环计数器。
+
+处置：录音窗口退回 3s；把写死上限改成按尺寸推导
+`if (chunk > (want / bsize) + 40) break;` 以免"改时长就静默失败"；
+并把硬编码的 `"recording ~3s"` 改成打印真实秒数。
+**注意：不要据此把录音时长调到 4 秒以上。**
 
 > 备注：`POST /v1/voice/wake` 走 `app/xiaoai.py` 直连 Home Assistant，
 > **不经过 MQTT 网关**，因此网关停着也能喊人 —— 调测时很有用。
@@ -223,7 +238,7 @@ INFO:     127.0.0.1:48204 - "POST /v1/voice/utterance?rate=16000&device_id=esp32
   已在代码中就位，但**重启后端与重刷固件后的复测还没做**，因此不主张已完成验收。
 - 唤醒后先播提示音再开麦，端到端多约 2.5s（提示音本身 + 等待），
   首次交互延迟实测约 6–8s（含 ASR 约 2s 与本地 LLM 规划 3–5s）。
-- 录音窗口固定 5s（`HM_VOICE_SECONDS`），长指令仍会截断；尚未做端点检测自动收尾。
+- 录音窗口固定 **3s**（`HM_VOICE_SECONDS`），长指令仍会截断；尚未做端点检测自动收尾。实测超过约 4 秒（128000B）会耗尽音频缓冲池并锁住整机，见 6.3。
 - **不主张关键词唤醒准确率达标**。`kws_listen` 的阈值（`thr=0.55` / `vad=900`）
   未在足够样本上做过准确率统计，验收时只按"持续监听可跑通"表述。
 - 本机 ASR 是 CPU int8 推理，约 2s/句；叠加 3–5s 的本地 LLM 规划，
