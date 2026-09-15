@@ -978,14 +978,17 @@ static int hm_led_blink(int times, int on_ms, int off_ms)
 
 static float hm_chunk_rms(const unsigned char *buf, int nbytes)
 {
-    long sum = 0;
+    /* 必须 64 位累加：一个 chunk 320 个样本，单样本平方可达 1.07e9，
+     * 合计约 3.4e11，32 位 long 必然回绕（回绕值还可能为负 → sqrt 得 nan），
+     * 会让 VAD 门限彻底失效：静音也误开、调高则永不开。 */
+    long long sum = 0;
     int n = nbytes / 2;
     int i;
     if (n <= 0)
         return 0.0f;
     for (i = 0; i + 1 < nbytes; i += 2) {
         int s = (int)(int16_t)(buf[i] | (buf[i + 1] << 8));
-        sum += (long)s * s;
+        sum += (long long)s * (long long)s;
     }
     return (float)sqrt((double)sum / (double)n);
 }
@@ -1280,7 +1283,8 @@ static float kws_score_pcm(const int16_t *pcm, int nsamp)
             float fx = (feat[i] - kws_mu[i]) * kws_sd_inv[i];
             z += fx * (float)kws_w_q[i] * kws_w_scale;
         }
-        printf("[KWS] f2=%.3f f3=%.3f f4=%.3f z=%.3f\n", feat[2], feat[3], feat[4], z);
+        printf("[KWS] pk=%d f2=%.3f f3=%.3f f4=%.3f z=%.3f\n",
+               (int)peak, feat[2], feat[3], feat[4], z);
         return 1.0f / (1.0f + expf(-z));
     }
 }
@@ -1378,6 +1382,13 @@ static int kws_capture_score(float *score)
 static volatile int g_kws_listen_run = 0;
 static volatile int g_kws_listen_hits = 0;
 static volatile int g_kws_listen_frames = 0;
+
+/* read_chunk 诊断：四种失败以前全静默，frames=0 时无从定位 */
+static volatile int g_kws_dbg_calls = 0;
+static volatile int g_kws_dbg_alloc = 0;
+static volatile int g_kws_dbg_enq = 0;
+static volatile int g_kws_dbg_start = 0;
+static volatile int g_kws_dbg_empty = 0;
 /* 唤醒后是否自动进入语音闭环（录音 -> 私有云本机 ASR -> 规划执行）。
  * 默认开启：这是"主动式无感交互"的默认形态；验收纯 KWS 时可 kws_listen voice off。 */
 static volatile int g_kws_auto_voice = 1;
@@ -1399,6 +1410,7 @@ typedef struct {
 static int kws_listen_open_mic(int *out_fd)
 {
     struct audio_caps_desc_s caps;
+    struct ap_buffer_info_s info;
     struct pollfd pfd;
     int fd;
 
@@ -1416,6 +1428,18 @@ static int kws_listen_open_mic(int *out_fd)
         close(fd);
         return -1;
     }
+    /* 必须调！audio.c 的 audio_allocbuffer() 会先判 `periods >= nbuffers`
+     * 而直接 return 0，而 nbuffers 只有这个 ioctl 会赋值。少这一句，
+     * 后续所有 ALLOCBUFFER 都拿不到 buffer（且 errno 保持 0，极难发现）。 */
+    memset(&info, 0, sizeof(info));
+    if (ioctl(fd, AUDIOIOC_GETBUFFERINFO, (uintptr_t)&info) >= 0) {
+        printf("[KWS-L] bufinfo nbuffers=%u size=%u\n",
+               (unsigned)info.nbuffers, (unsigned)info.buffer_size);
+        fflush(stdout);
+    } else {
+        printf("[KWS-L] GETBUFFERINFO fail errno=%d\n", errno);
+        fflush(stdout);
+    }
     memset(&pfd, 0, sizeof(pfd));
     pfd.fd = fd;
     pfd.events = POLLIN;
@@ -1430,38 +1454,65 @@ static int kws_listen_read_chunk(int fd, int16_t *dst, int *started,
     struct ap_buffer_s *apb = NULL;
     int n = 0;
 
+    g_kws_dbg_calls++;
     memset(&desc, 0, sizeof(desc));
     desc.numbytes = KWS_LISTEN_CHUNK;
     desc.u.pbuffer = &apb;
     if (ioctl(fd, AUDIOIOC_ALLOCBUFFER, (uintptr_t)&desc) !=
-            (int)sizeof(desc) || !apb)
+            (int)sizeof(desc) || !apb) {
+        g_kws_dbg_alloc++;
+        if (g_kws_dbg_alloc <= 3) {
+            printf("[KWS-DBG] allocbuf fail errno=%d\n", errno);
+            fflush(stdout);
+        }
+        usleep(10000);              /* 别让失败路径变成热转圈 */
         return -1;
+    }
     memset(&desc, 0, sizeof(desc));
     desc.u.buffer = apb;
     desc.numbytes = KWS_LISTEN_CHUNK;
     if (ioctl(fd, AUDIOIOC_ENQUEUEBUFFER, (uintptr_t)&desc) < 0) {
+        g_kws_dbg_enq++;
+        if (g_kws_dbg_enq <= 3) {
+            printf("[KWS-DBG] enqueue fail errno=%d\n", errno);
+            fflush(stdout);
+        }
         memset(&desc, 0, sizeof(desc));
         desc.u.buffer = apb;
         ioctl(fd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
+        usleep(10000);
         return -1;
     }
     if (!*started) {
         if (ioctl(fd, AUDIOIOC_START, 0) < 0) {
+            g_kws_dbg_start++;
+            if (g_kws_dbg_start <= 3) {
+                printf("[KWS-DBG] start fail errno=%d\n", errno);
+                fflush(stdout);
+            }
             memset(&desc, 0, sizeof(desc));
             desc.u.buffer = apb;
             ioctl(fd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
+            usleep(10000);
             return -1;
         }
         *started = 1;
         poll(pfd, 1, 800);
     } else {
-        usleep(30000);
+        usleep(10000);
     }
     if (apb->nbytes > 0) {
         n = apb->nbytes;
         if (n > KWS_LISTEN_CHUNK)
             n = KWS_LISTEN_CHUNK;
         memcpy(dst, apb->samp, n);
+    } else {
+        g_kws_dbg_empty++;
+        if (g_kws_dbg_empty <= 3) {
+            printf("[KWS-DBG] empty nmax=%u flags=0x%04x\n",
+                   (unsigned)apb->nmaxbytes, (unsigned)apb->flags);
+            fflush(stdout);
+        }
     }
     memset(&desc, 0, sizeof(desc));
     desc.u.buffer = apb;
@@ -1640,6 +1691,9 @@ static void *kws_listen_worker(void *arg)
     free(ring);
     printf("[KWS-L] stopped frames=%d hits=%d last=%.3f\n",
            frames, g_kws_listen_hits, g_kws_listen_last);
+    printf("[KWS-DBG] calls=%d alloc=%d enq=%d start=%d empty=%d\n",
+           g_kws_dbg_calls, g_kws_dbg_alloc, g_kws_dbg_enq,
+           g_kws_dbg_start, g_kws_dbg_empty);
     fflush(stdout);
     return NULL;
 }
@@ -1671,6 +1725,8 @@ static void cmd_kws_listen(int argc, char **argv)
         g_kws_listen_run = 1;
         g_kws_listen_hits = 0;
         g_kws_listen_frames = 0;
+        g_kws_dbg_calls = g_kws_dbg_alloc = g_kws_dbg_enq = 0;
+        g_kws_dbg_start = g_kws_dbg_empty = 0;
         /* 唤醒后要在本线程里跑一次完整的 HTTPS 往返（mbedTLS 握手 + 4KB 响应
          * 缓冲 + JSON 解析）。默认 pthread 栈放不下，实测表现是"唤醒一次后
          * 整机静默、云端收不到任何请求"。这里显式给足 32KB。 */
@@ -1700,6 +1756,9 @@ static void cmd_kws_listen(int argc, char **argv)
                g_kws_listen_run, g_kws_listen_hits, g_kws_listen_frames,
                g_kws_listen_last,
                (float)g_kws_listen_thr_x100 / 100.0f, g_kws_listen_vad);
+        printf("[KWS-DBG] calls=%d alloc=%d enq=%d start=%d empty=%d\n",
+               g_kws_dbg_calls, g_kws_dbg_alloc, g_kws_dbg_enq,
+               g_kws_dbg_start, g_kws_dbg_empty);
     }
 }
 
