@@ -588,154 +588,22 @@ static void cmd_vision(int argc, char **argv)
 
 #define HM_VOICE_SECONDS 3
 
-/* 按驱动声明的 nbuffers/buffer_size 做标准多缓冲流式采集：
- * poll -> DEQUEUE 取满缓冲 -> 拷贝 -> 重新 ENQUEUE，直到录满目标字节数。 */
+/* 音频连续采集：2026-09-10 验证过的配方（单次 open + 640B 入队循环）。
+ *
+ * 关键教训：**不要每块重新 open**。nuttx/audio/audio.c 的 head/tail 记账在重新
+ * open 后会错位，poll 立刻返回 POLLIN|POLLERR 而 apb->nbytes 仍为 0，表现就是
+ * 只拿到第 1 块 640 字节、之后再也拿不到数据。本函数曾在 2026-09-03 采用
+ * "每块 open->config->alloc->enqueue->start->排空->stop->free->close" 的保底
+ * 形态，2026-09-10 查明该形态已被上述 bug 破坏（实机复现 "captured 640 bytes /
+ * captured too little"），因此改为直接复用 hm_audio_stream_session。 */
+static int hm_audio_stream_session(unsigned char *dst, int want, int rate);
+
 static int hm_voice_record(unsigned char *buf, int want_bytes, int rate)
 {
-    const char *audio_path = "/dev/audio/pcm_in0";
-    struct audio_caps_desc_s caps;
-    struct audio_buf_desc_s desc;
-    struct ap_buffer_info_s info;
-    struct pollfd pfd;
-    struct ap_buffer_s **apbs = NULL;
-    unsigned char *dst = buf;
-    int remain = want_bytes;
-    int fd = -1;
-    int started = 0;
-    int nbuf = 0;
-    int bsize = 0;
-    int ret = -1;
-    int i;
-    int idle_polls = 0;
+    int got = hm_audio_stream_session(buf, want_bytes, rate);
 
-    fd = open(audio_path, O_RDWR | O_NONBLOCK);
-    if (fd < 0) {
-        printf("[Voice-DBG] open fail errno=%d\n", errno);
-        return -1;
-    }
-
-    memset(&caps, 0, sizeof(caps));
-    caps.caps.ac_len = sizeof(struct audio_caps_s);
-    caps.caps.ac_type = AUDIO_TYPE_INPUT;
-    caps.caps.ac_controls.w = rate;
-    caps.caps.ac_controls.b[2] = 16;
-    caps.caps.ac_channels = 1;
-    caps.caps.ac_format.hw = AUDIO_FMT_PCM;
-    if (ioctl(fd, AUDIOIOC_CONFIGURE, (uintptr_t)&caps) < 0) {
-        printf("[Voice-DBG] config fail\n");
-        goto out;
-    }
-
-    memset(&info, 0, sizeof(info));
-    if (ioctl(fd, AUDIOIOC_GETBUFFERINFO, (uintptr_t)&info) < 0) {
-        printf("[Voice-DBG] bufferinfo fail\n");
-        goto out;
-    }
-    nbuf = info.nbuffers;
-    bsize = info.buffer_size;
-    printf("[Voice-DBG] driver nbuffers=%d buffer_size=%d\n", nbuf, bsize);
-    /* 保底采集路径（2026-09-03 验证过的唯一稳定形态）：
-     * 每个 640 字节块都完整走 开->配置->分配->入队->启动->排空->停->释放->关，
-     * 不重入队、不多缓冲（该 I2S 下半层重入队不再产生数据）。
-     * 块间存在间隙，音质有损；ASR 容忍度实测决定后续是否深挖驱动。 */
-    bsize = 640;
-    {
-        int cycles = want_bytes / bsize;
-        int i;
-        for (i = 0; i < cycles && remain > 0; i++) {
-            struct audio_caps_desc_s caps;
-            struct audio_buf_desc_s desc;
-            struct ap_buffer_info_s info;
-            struct pollfd pfd;
-            struct ap_buffer_s *apb = NULL;
-            int cfd = open(audio_path, O_RDWR | O_NONBLOCK);
-            int started = 0;
-            int waited = 0;
-            int got = -1;
-
-            if (cfd < 0)
-                break;
-            memset(&caps, 0, sizeof(caps));
-            caps.caps.ac_len = sizeof(struct audio_caps_s);
-            caps.caps.ac_type = AUDIO_TYPE_INPUT;
-            caps.caps.ac_controls.w = rate;
-            caps.caps.ac_controls.b[2] = 16;
-            caps.caps.ac_channels = 1;
-            caps.caps.ac_format.hw = AUDIO_FMT_PCM;
-            if (ioctl(cfd, AUDIOIOC_CONFIGURE, (uintptr_t)&caps) < 0) {
-                close(cfd);
-                break;
-            }
-            memset(&info, 0, sizeof(info));
-            (void)ioctl(cfd, AUDIOIOC_GETBUFFERINFO, (uintptr_t)&info);
-            memset(&desc, 0, sizeof(desc));
-            desc.numbytes = bsize;
-            desc.u.pbuffer = &apb;
-            if (ioctl(cfd, AUDIOIOC_ALLOCBUFFER, (uintptr_t)&desc) !=
-                (int)sizeof(desc) || !apb) {
-                close(cfd);
-                break;
-            }
-            memset(&desc, 0, sizeof(desc));
-            desc.u.buffer = apb;
-            desc.numbytes = bsize;
-            if (ioctl(cfd, AUDIOIOC_ENQUEUEBUFFER, (uintptr_t)&desc) < 0) {
-                memset(&desc, 0, sizeof(desc));
-                desc.u.buffer = apb;
-                ioctl(cfd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
-                close(cfd);
-                break;
-            }
-            if (ioctl(cfd, AUDIOIOC_START, 0) == 0) {
-                started = 1;
-                memset(&pfd, 0, sizeof(pfd));
-                pfd.fd = cfd;
-                pfd.events = POLLIN;
-                waited = 0;
-                while (apb->nbytes == 0 && waited++ < 6) {
-                    if (poll(&pfd, 1, 200) <= 0 && apb->nbytes == 0)
-                        break;
-                }
-                if (apb->nbytes > 0) {
-                    int n = apb->nbytes < bsize ? apb->nbytes : bsize;
-                    if (n > remain)
-                        n = remain;
-                    memcpy(dst, apb->samp, n);
-                    dst += n;
-                    remain -= n;
-                    got = n;
-                }
-            }
-            if (started)
-                ioctl(cfd, AUDIOIOC_STOP, 0);
-            memset(&desc, 0, sizeof(desc));
-            desc.u.buffer = apb;
-            ioctl(cfd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
-            close(cfd);
-            if (got <= 0)
-                break;
-            if (i % 50 == 49)
-                printf("[Voice]: %d/%d chunks\n", i + 1, cycles);
-        }
-    }
-
-    ret = want_bytes - remain;
-    printf("[Voice-DBG] captured %d bytes\n", ret);
-
-out:
-    if (started)
-        ioctl(fd, AUDIOIOC_STOP, 0);
-    for (i = 0; i < nbuf; i++) {
-        if (apbs && apbs[i]) {
-            memset(&desc, 0, sizeof(desc));
-            desc.u.buffer = apbs[i];
-            ioctl(fd, AUDIOIOC_FREEBUFFER, (uintptr_t)&desc);
-        }
-    }
-    if (apbs)
-        free(apbs);
-    close(fd);
-    return ret;
+    printf("[Voice-DBG] captured %d bytes\n", got);
+    return got;
 }
 
 static void hm_json_escape(const char *in, char *out, int cap)
@@ -1670,6 +1538,11 @@ static void *kws_listen_worker(void *arg)
                                         close(fd);
                                         fd = -1;
                                     }
+                                    /* 让 audio 驱动把会话真正摘干净再重新
+                                     * open：close 后立刻 open 有踩到驱动
+                                     * head/tail 记账错位的风险（见
+                                     * hm_voice_record 注释）。 */
+                                    usleep(150000);
                                     hm_voice_utterance_roundtrip();
                                     if (kws_listen_open_mic(&fd) != 0) {
                                         printf("[KWS-L] mic reopen failed; "
@@ -1735,10 +1608,23 @@ static void cmd_kws_listen(int argc, char **argv)
         g_kws_listen_run = 1;
         g_kws_listen_hits = 0;
         g_kws_listen_frames = 0;
-        if (pthread_create(&g_kws_listen_tid, NULL, kws_listen_worker, NULL) != 0) {
-            printf("[KWS-L] thread create fail\n");
-            g_kws_listen_run = 0;
-            return;
+        /* 唤醒后要在本线程里跑一次完整的 HTTPS 往返（mbedTLS 握手 + 4KB 响应
+         * 缓冲 + JSON 解析）。默认 pthread 栈放不下，实测表现是"唤醒一次后
+         * 整机静默、云端收不到任何请求"。这里显式给足 32KB。 */
+        {
+            pthread_attr_t kattr;
+            int rc;
+
+            pthread_attr_init(&kattr);
+            pthread_attr_setstacksize(&kattr, 32 * 1024);
+            rc = pthread_create(&g_kws_listen_tid, &kattr,
+                                kws_listen_worker, NULL);
+            pthread_attr_destroy(&kattr);
+            if (rc != 0) {
+                printf("[KWS-L] thread create fail\n");
+                g_kws_listen_run = 0;
+                return;
+            }
         }
         pthread_detach(g_kws_listen_tid);
         printf("[KWS-L] started thr=%.2f vad=%d\n",
