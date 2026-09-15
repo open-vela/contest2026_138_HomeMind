@@ -1,10 +1,10 @@
 # HomeMind 当前状态
 
-> 文档更新：2026-09-12（摄像头恢复、混合存在检测、连续 PCM、能量唤醒、KWS 缺口收口）；项目事实截止：2026-09-12。唯一当前摘要为本节；下方历史记录保留原文，其过期结论不作为当前任务。
+> 文档更新：2026-09-15（本机 ASR 语音闭环、板载 KWS 实机唤醒、隐私模式落地）；项目事实截止：2026-09-15。唯一当前摘要为本节；下方历史记录保留原文，其过期结论不作为当前任务。
 
 ## 唯一当前摘要
 
-**部分完成：截至 2026-09-12，项目已有联网控制原型、家庭侧 API/SQLite/MQTT/网关/relay 闭环、摄像头采集恢复、端侧混合存在检测、连续 PCM 与能量 VAD 唤醒。真关键词「你好，openvela」KWS 未达标（已知缺口）；严格隐私模式、小程序真机/跨端验收、正式提交材料与远端合入仍未完成。修改文档不代表原方案已兑现。**
+**部分完成：截至 2026-09-12，项目已有联网控制原型、家庭侧 API/SQLite/MQTT/网关/relay 闭环、摄像头采集恢复、端侧混合存在检测、连续 PCM 与能量 VAD 唤醒。真关键词「你好，openvela」KWS 已在实机跑通（2026-09-15 唤醒评分 1.000 触发，无误触发）；严格隐私模式已落地（`PRIVACY_MODE=1` + 本机转写，音频不出局域网）；小程序真机/跨端验收、正式提交材料与远端合入仍未完成。修改文档不代表原方案已兑现。**
 
 当前主线为 ESP32-S3-EYE + OpenVela/ai_agent 家庭感知中枢。摄像头冻结根因已定位并修复（CLI 64KB DRAM 栈），`media_probe` 与 `vision local` 可用；混合存在检测 9/10·10/10 遮挡；`audio_stream` 连续 PCM 3s PASS；`wake_loop` 能量 VAD + LED 已验收。
 
@@ -18,10 +18,10 @@
 | 端侧存在检测 | 部分完成 | 混合检测（肤色+边缘+运动+TFLM）：有目标 9/10 DETECTED（mean 0.474）；遮挡 10/10 none；[证据](docs/evidence/2026-09-10_vision_hybrid_presence.md) | 非完整人体检测器；20 正/20 负统计未达标 |
 | 连续音频 | 已验收 | `audio_stream 3` → 96000/96000B PASS；[配方](docs/evidence/2026-09-10_i2s_continuous_pcm.md) | I2S 多缓冲无 usleep 仍不可靠 |
 | 离线唤醒（能量 VAD） | 已验收 | `wake_loop`：说话 8s→4 WAKE+LED；静音→0；[证据](docs/evidence/2026-09-10_wake_loop_energy_vad.md) | 非指定词识别 |
-| 离线唤醒（KWS 指定词） | **未实现（已知缺口）** | 链路通（`wake_kws`）但手机/板载域差异导致判别不达标；[诚实状态](docs/evidence/2026-09-12_kws_honest_status.md) | 需统一采样≥20 条/类 + 板上标定，或公开中文 KWS 模型 |
-| 家庭语义任务编排 | 未实现 | 板端问答与工具调用已可用 | 家庭意图→必要文本 MiMo→受校验任务链路 |
+| 离线唤醒（KWS 指定词） | 部分完成 | 板载 KWS 持续监听实机跑通：`score=1.000`（阈值 0.55）触发唤醒、长跑 10039 帧 `hits=0` 无误触发；[唤醒与语音闭环证据](docs/evidence/2026-09-15_private_cloud_lan_asr_voice_loop.md) | 未做准确率统计（需≥20 条/类）；唤醒后提示音链路待复测 |
+| 家庭语义任务编排 | 部分完成 | 家庭本机 LLM（Qwen2.5-1.5B / llama.cpp）做语义规划 + `RISK_KEYWORDS` 安全护栏，三级回落；[证据](docs/evidence/2026-09-15_private_cloud_local_llm.md) | 端到端「说话→执行→播报」尚未取到成功日志 |
 | 日程、事件、资产 | 部分完成 | 家庭 FastAPI + SQLite `/v1/*` 已有[09-07 验收](docs/evidence/2026-09-07_home_backend_e2e.md)；小程序日程仍是本机 | 跨端同步、睡前场景分记 |
-| 严格私有化 | 未实现 | 家庭侧 API/SQLite/relay 已运行；历史公网视觉仍上传原始图像 | 正式模式关闭外发、云端边界验收 |
+| 严格私有化 | 部分完成 | `PRIVACY_MODE=1` 默认开启，`/v1/media/frame`、`/audio` 直接 403；转写改由**本机** faster-whisper 完成，音频不出局域网（`egress=none`） | 正式模式边界验收；历史公网视觉路径仅作记录 |
 | 最终提交 | 部分完成 | 报告模板、视频脚本、本地代码；AI 日志 14 files/2016 events ALL OK | CLA/PR 合入、正式材料、视频/照片、回执 |
 
 ### S1 版本归集（2026-09-12）
@@ -66,7 +66,11 @@
 ### 2026-09-15 研发增量（家庭侧已验收 / 固件待板端验收）
 
 - 家庭 API：`/v1/scenes` 睡前场景、`reminder_worker` 到期提醒、`perception` 感知事件入库、媒体原始出站 `PRIVACY_MODE` 403 门控。本机 e2e **11/11 PASS**，证据 `docs/evidence/2026-09-15_rnd_scenes_kws_privacy_coldstart.md`。
-- 固件源码：`kws_listen` 持续离线监听（VAD 门控 + KWS 评分 + LED/MQTT）；冷启动 Phase5 先起 `agent_loop`，断网本地工具/ask 不再无限排队。**板端串口验收与 BIN 哈希待本轮构建烧录后回填**。
+- 固件源码：`kws_listen` 持续离线监听（VAD 门控 + KWS 评分 + LED/MQTT）；冷启动 Phase5 先起 `agent_loop`，断网本地工具/ask 不再无限排队。
+- **板端已验收（2026-09-15，BIN 1422092 字节）**：单消费者下 `audio_stream 2` → `64000/64000 PASS continuous`；真实唤醒 `score=1.000` → 自动录音 `96000/96000`（连续无掉块）→ TLSv1.2 握手 310ms → `POST /v1/voice/utterance` **200** → 重新开麦继续监听且**不冻机**。
+  卡了一天的「只出 640 字节 / KWS `frames=0`」根因是**麦克风被两个消费者同时打开**（`nuttx/audio/audio.c` head/tail 记账错位 + 音频缓冲池耗尽），**不是「需要拔插 USB 真下电」**。
+  证据：`docs/evidence/2026-09-15_private_cloud_lan_asr_voice_loop.md`。
+- **唤醒后「听得见的应答」已上线**：新增 `POST /v1/voice/wake`（小爱回「我在，请说」，直连 HA 不经网关）；去掉唤醒后约 480ms 的 LED 阻塞、MQTT 唤醒事件挪到录音之后、录音窗口 3s→5s。原因是用户习惯把唤醒词与指令连成一整句说，而唤醒要「人声之后出现静音」才判定成功 —— 等触发时指令已说完，云端只会返回 `asr_empty`。**该改动后的整链复测尚未取到成功日志**，故只主张「链路成立 + 各段可复现」，不主张整链验收完成。
 - `tools/deploy-to-vm.sh` 声明补丁 0004；现场 I2S 已含 buffer info，避免重复 apply。
 - 仍不主张：指定词 KWS 准确率达标、人脸/手势身份、小程序跨端真机闭环、完整长稳。
 
