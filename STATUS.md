@@ -62,6 +62,14 @@
 
 状态仅用：**已验收**（限定场景有日期、证据和版本）、**部分完成**（子项有证据而目标不全）、**待验证**（已有实现或记录但证据不足）、**未实现**（目标能力尚未接入）。不使用总体完成百分比，不用局部测试勾选整个里程碑。每项完成声明必须关联测试日期、证据和源码/产物版本；缺项保留缺口。
 
+
+### 2026-09-15 研发增量（家庭侧已验收 / 固件待板端验收）
+
+- 家庭 API：`/v1/scenes` 睡前场景、`reminder_worker` 到期提醒、`perception` 感知事件入库、媒体原始出站 `PRIVACY_MODE` 403 门控。本机 e2e **11/11 PASS**，证据 `docs/evidence/2026-09-15_rnd_scenes_kws_privacy_coldstart.md`。
+- 固件源码：`kws_listen` 持续离线监听（VAD 门控 + KWS 评分 + LED/MQTT）；冷启动 Phase5 先起 `agent_loop`，断网本地工具/ask 不再无限排队。**板端串口验收与 BIN 哈希待本轮构建烧录后回填**。
+- `tools/deploy-to-vm.sh` 声明补丁 0004；现场 I2S 已含 buffer info，避免重复 apply。
+- 仍不主张：指定词 KWS 准确率达标、人脸/手势身份、小程序跨端真机闭环、完整长稳。
+
 ## 2026-09-07 工作包 A：版本归集与音频排障（Ubuntu 现场，已本地提交）
 
 - **版本归集完成**：Ubuntu 官方仓 `contest-final` 提交 `70a0c88`（21 文件，+2677 行），将 09-06 现场全部媒体/视觉/语音源码与产物归档：`nsh_commands.c` 新增 `cmd_vision`/`cmd_set_media`/`media_capture_rgb565` 及 voice 录制保底链路（+1304 行）、`vela_tls.c` TLS 生命周期修复（+155 行）、LCD 显示线程、板级摄像头源 `firmware/nuttx_media/esp32s3_board_camera.c`（537 行）、补丁 `0002/0003/0004`（EYE 媒体、bringup 媒体补位、I2S 音频缓冲信息）、`scripts/build.sh` 新增 `apply_media_config`（ESP32S3_CAM/VIDEO_STREAM/EXAMPLES_CAMERA/I2S0 RX 麦克风）。`artifacts/SHA256SUMS` 更新为 `c8a373e6…`/`473773e9…`，`SOURCE_SNAPSHOT.json` 更新至 2026-09-07 实际哈希；`.bak` 迭代备份移出仓库。
@@ -303,6 +311,13 @@
 Ubuntu 主机、OpenVela 工作区、固定依赖、串口权限和服务器地址 `192.168.31.251` 均已验证可用。2026-09-01 最终修复版干净构建已烧录到 ESP32-S3-EYE：设备锁定强 AP `50:88:11:7a:02:69`，通过 DHCP 获得 `192.168.31.248`；冷启动传输链 5/5、连续自然问答 7/7 + 4/4、受控重连自然问答 3/3，以及最终标准自然语言长稳 10/10 均有通过证据。当前仅保留远程推送未执行这一项，等待用户明确要求。
 
 ## 2026-08-30 续接（小程序 BOM 修复；LCD 状态图标显示上线；C1.0 计划交付）
+
+
+### 2026-09-15 语音入口定案
+
+- **采用**：小爱音箱Pro-多功能房作中文语音入口；HomeMind `ha_bridge` 观察吸顶灯/小爱状态，HA 开关灯已落 `light_state_changed`（e2e PASS）。
+- **不做**：公开中文 KWS 上板（适配与准确率在截止前不可控）。板端 `kws_listen` 仅作持续监听实验，不宣称关键词达标。
+- 证据：`docs/evidence/2026-09-15_voice_xiaoai_vs_public_kws.md`。
 
 ### 0. 屏幕泛白根因与修复(2026-08-30 补充)
 

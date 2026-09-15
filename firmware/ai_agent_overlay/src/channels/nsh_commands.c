@@ -161,6 +161,7 @@ static void cmd_help(void)
         "  wake_loop [sec] [thr] [hold] - Energy VAD wake + LED blink\n"
         "  wake_kws [thr] - Hello openvela KWS score + LED\n"
         "  kws_listen start|stop|status [thr] [vad_thr] - Continuous offline KWS\n"
+        "  kws_listen voice on|off - 唤醒后是否自动进入语音闭环（默认 on）\n"
         "  intent_send <text...> - MQTT intent to home agent\n"
         "  vision_loop start|stop [sec] - Periodic vision tick\n"
         "  wake_rec pos|neg <i> [sec] - Record KWS sample to /data\n"
@@ -758,16 +759,14 @@ static void hm_json_escape(const char *in, char *out, int cap)
     out[n] = '\0';
 }
 
-static void cmd_voice(int argc, char **argv)
+/* 语音闭环的一次完整往返：录音 -> 家庭私有云本机 ASR + 语义规划 + 执行 ->
+ * 小爱播报回复。命令行 `voice` 与 KWS 唤醒后的自动触发共用这一份实现。
+ * 返回 0 表示拿到了有效转写（或识别到人说话），-1 表示没听到人话/链路失败。 */
+static int hm_voice_utterance_roundtrip(void)
 {
-    char host[64] = "api.hfy-ai.cloud";
+    char host[64] = "192.168.31.251";
     char port[8] = "443";
     char token[128] = "";
-    char llm_host[64] = "";
-    char llm_port[8] = "443";
-    char llm_path[64] = "/v1/chat/completions";
-    char api_key[160] = "";
-    char model[64] = "mimo-v2.5";
     char auth[224];
     char path[128];
     static unsigned char *pcm;
@@ -796,42 +795,34 @@ static void cmd_voice(int argc, char **argv)
     claw_config_get("media_token", token, sizeof(token));
     if (!token[0]) {
         printf("[Voice-ERR]: media_token not set (set_media first)\n");
-        return;
+        return -1;
     }
-    if (claw_config_get("llm_host", llm_host, sizeof(llm_host)) != OK ||
-        !llm_host[0]) {
-        printf("[Voice-ERR]: llm not configured (set_llm first)\n");
-        return;
-    }
-    claw_config_get("llm_port", llm_port, sizeof(llm_port));
-    claw_config_get("llm_path", llm_path, sizeof(llm_path));
-    claw_config_get("api_key", api_key, sizeof(api_key));
-    claw_config_get("model", model, sizeof(model));
-    if (!api_key[0]) {
-        printf("[Voice-ERR]: api_key missing\n");
-        return;
-    }
+    /* 不再需要 llm_host/api_key：语义规划与执行都在家庭私有云本机完成，
+     * 端侧只负责采集音频并上报（对应方案"端侧采集、云侧理解"的分工）。 */
 
     pcm = malloc(HM_VOICE_SECONDS * 16000 * 2);
     if (!pcm) {
         printf("[Voice-ERR]: alloc failed\n");
-        return;
+        return -1;
     }
     printf("[Voice]: recording ~3s, speak now...\n");
     hm_lcd_show_text("SPEAK NOW");
     pcm_len = hm_voice_record(pcm, HM_VOICE_SECONDS * 16000 * 2, 16000);
     if (pcm_len < HM_VOICE_SECONDS * 16000) {
         printf("[Voice-ERR]: captured too little (%d bytes)\n", pcm_len);
-    hm_lcd_show_text("MIC ERR");
-    hm_lcd_release();
+        hm_lcd_show_text("MIC ERR");
+        hm_lcd_release();
         free(pcm);
         pcm = NULL;
-        return;
+        return -1;
     }
     printf("[Voice]: captured %d bytes, transcribing...\n", pcm_len);
     hm_lcd_show_text("THINKING");
 
-    snprintf(path, sizeof(path), "/v1/media/audio?rate=16000");
+    /* 一步到位：家庭私有云本机 ASR + 语义规划 + 执行。
+     * announce=0 —— 播报由端侧自己发起，避免同一条回复被云端与端侧播两遍。 */
+    snprintf(path, sizeof(path),
+             "/v1/voice/utterance?rate=16000&device_id=esp32s3-eye&announce=0");
     snprintf(auth, sizeof(auth), "Bearer %s", token);
     status = vela_https_request(host, port, "POST", path, bin_hdr,
                                 (const char *)pcm, pcm_len,
@@ -840,58 +831,30 @@ static void cmd_voice(int argc, char **argv)
         resp[rlen] = '\0';
     else
         resp[sizeof(resp) - 1] = '\0';
+    /* 请求已同步发送完毕，立即释放录音缓冲：
+     * pcm 是 static 指针，成功路径若不释放会每轮语音泄漏约 96 KB。 */
+    free(pcm);
+    pcm = NULL;
     if (status != 200) {
-        printf("[Voice-ERR]: asr http=%d body=%.200s\n", status, resp);
-        free(pcm);
-        pcm = NULL;
-        return;
+        printf("[Voice-ERR]: utterance http=%d body=%.200s\n", status, resp);
+        return -1;
     }
     hm_media_json_str(resp, "\"text\":\"", trans, sizeof(trans));
     if (!trans[0]) {
-        printf("[Voice-ERR]: empty transcript\n");
-        free(pcm);
-        pcm = NULL;
-        return;
+        /* 云侧回 asr_empty：确实没听到人话，不算链路故障，不触发任何控制 */
+        printf("[Voice]: no speech recognised (asr_empty)\n");
+        hm_lcd_release();
+        hm_lcd_show_text("NO SPEECH");
+        return -1;
     }
     printf("[Voice]: %s\n", trans);
 
-    /* MiMo 问答（同步，一句话回答） */
-    hm_json_escape(trans, esc_t, sizeof(esc_t));
-    body = malloc(2048);
-    if (!body) {
-        printf("[Voice-ERR]: body alloc failed\n");
-        free(pcm);
-        pcm = NULL;
-        return;
-    }
-    snprintf(body, 2048,
-             "{\"model\":\"%s\",\"messages\":[{\"role\":\"user\","
-             "\"content\":\"%s（你是家庭机器人HomeMind，请用不超过60字的"
-             "中文口语回答）\"}]}",
-             model, esc_t);
-    snprintf(path, sizeof(path), "%s", llm_path);
-    snprintf(auth, sizeof(auth), "Bearer %s", api_key);
-    printf("[Voice]: asking %s:%s%s ...\n", llm_host, llm_port, llm_path);
-    status = vela_https_request(llm_host, llm_port, "POST", path, json_hdr,
-                                body, strlen(body),
-                                resp, sizeof(resp), &rlen);
-    free(body);
-    body = NULL;
-    free(pcm);
-    pcm = NULL;
-    if (rlen < sizeof(resp))
-        resp[rlen] = '\0';
-    else
-        resp[sizeof(resp) - 1] = '\0';
-    if (status != 200) {
-        printf("[Voice-ERR]: llm http=%d body=%.200s\n", status, resp);
-        return;
-    }
-    hm_media_json_str(resp, "\"content\":\"", esc_a, sizeof(esc_a));
-    if (!esc_a[0]) {
-        printf("[Voice-ERR]: empty answer\n");
-        return;
-    }
+    /* 回答直接取私有云返回的 plan.speak，不再调用公网大模型 */
+    esc_a[0] = '\0';
+    hm_media_json_str(resp, "\"speak\":\"", esc_a, sizeof(esc_a));
+    if (!esc_a[0])
+        snprintf(esc_a, sizeof(esc_a), "好的");
+    printf("[Voice]: resp=%.400s\n", resp);   /* 含 plan/executed，便于验收 */
     printf("[Agent]: %s\n", esc_a);
     hm_lcd_release();
     hm_lcd_show_text("DONE");
@@ -900,8 +863,10 @@ static void cmd_voice(int argc, char **argv)
     snprintf(auth, sizeof(auth), "Bearer %s", token);
     hm_json_escape(esc_a, esc_t, sizeof(esc_t));
     body = malloc(1024);
-    if (!body)
-        return;
+    if (!body) {
+        printf("[Voice-ERR]: announce alloc failed\n");
+        return 0;   /* 转写与执行已完成，只是播报没发出去 */
+    }
     snprintf(body, 1024,
              "{\"device_id\":\"esp32s3-eye\",\"text\":\"%s\"}", esc_t);
     status = vela_https_request(host, port, "POST", "/v1/media/announce",
@@ -911,16 +876,18 @@ static void cmd_voice(int argc, char **argv)
     body = NULL;
     printf("[Voice]: announce http=%d（音箱应已播报）\n", status);
 
-    /* 原文送入真实 agent 管线：本地意图/工具（如开灯）仍会被执行 */
-    {
-        agent_msg_t msg = { 0 };
-        strncpy(msg.channel, "cli", sizeof(msg.channel) - 1);
-        strncpy(msg.chat_id, "console", sizeof(msg.chat_id) - 1);
-        msg.content = strdup(trans);
-        if (msg.content)
-            message_bus_push_inbound(&msg);
-    }
+    /* 注意：语义规划与执行已在家庭私有云完成（云端会下发 led/mihome 指令），
+     * 端侧不再把同一句话二次送入本地 agent 管线，避免"开灯"被执行两次。 */
     (void)i;
+    return 0;
+}
+
+/* 命令行入口：voice */
+static void cmd_voice(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    hm_voice_utterance_roundtrip();
 }
 
 
@@ -1492,6 +1459,9 @@ static int kws_capture_score(float *score)
 static volatile int g_kws_listen_run = 0;
 static volatile int g_kws_listen_hits = 0;
 static volatile int g_kws_listen_frames = 0;
+/* 唤醒后是否自动进入语音闭环（录音 -> 私有云本机 ASR -> 规划执行）。
+ * 默认开启：这是"主动式无感交互"的默认形态；验收纯 KWS 时可 kws_listen voice off。 */
+static volatile int g_kws_auto_voice = 1;
 static volatile float g_kws_listen_last = 0.0f;
 static pthread_t g_kws_listen_tid;
 static int g_kws_listen_thr_x100 = 55;   /* score thr * 100 */
@@ -1686,6 +1656,36 @@ static void *kws_listen_worker(void *arg)
                                         printf("[KWS-L] mqtt offline\n");
                                     fflush(stdout);
                                 }
+                                /* 唤醒即进入语音闭环：让出麦克风 -> 录音 ->
+                                 * 家庭私有云本机 ASR + 语义规划 + 执行 ->
+                                 * 重新打开麦克风继续监听。
+                                 * 断网时这一步会在首个 HTTP 请求快速失败，
+                                 * 不影响 KWS 继续监听与本地工具。 */
+                                if (g_kws_auto_voice) {
+                                    if (started) {
+                                        ioctl(fd, AUDIOIOC_STOP, 0);
+                                        started = 0;
+                                    }
+                                    if (fd >= 0) {
+                                        close(fd);
+                                        fd = -1;
+                                    }
+                                    hm_voice_utterance_roundtrip();
+                                    if (kws_listen_open_mic(&fd) != 0) {
+                                        printf("[KWS-L] mic reopen failed; "
+                                               "stop listening\n");
+                                        fflush(stdout);
+                                        /* 置 0 让下一轮循环自然退出，
+                                         * 保留 free(win)/free(ring) 的清理路径 */
+                                        g_kws_listen_run = 0;
+                                    } else {
+                                        pfd.fd = fd;
+                                        pfd.events = POLLIN;
+                                        speech = 0;
+                                        silence = 0;
+                                        hold = 0;
+                                    }
+                                }
                                 hm_lcd_show_text("KWS LISTEN");
                             }
                         }
@@ -1711,6 +1711,12 @@ static void *kws_listen_worker(void *arg)
 static void cmd_kws_listen(int argc, char **argv)
 {
     const char *sub = (argc >= 2) ? argv[1] : "status";
+    if (strcmp(sub, "voice") == 0) {
+        int on = !(argc >= 3 && strcmp(argv[2], "off") == 0);
+        g_kws_auto_voice = on;
+        printf("[KWS-L] auto voice = %s\n", on ? "on" : "off");
+        return;
+    }
     if (strcmp(sub, "start") == 0) {
         if (g_kws_listen_run) {
             printf("[KWS-L] already running\n");
