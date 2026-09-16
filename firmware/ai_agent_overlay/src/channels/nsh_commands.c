@@ -925,6 +925,13 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
     long gap_max = 0;
     long poll_wait_ms = 0;
     static unsigned char prev_chunk[640];
+    /* g_hm_rx_normalize: RX 归一化状态，跨块保持 */
+    int conv_samp = 0;
+    int rx_have_last = 0;
+    int rx_last = 0;
+    int rx_skipped = 0;
+    int rx_pend_valid = 0;
+    int rx_pend = 0;
 
     fd = open(path, O_RDWR | O_NONBLOCK);
     if (fd < 0) {
@@ -1018,7 +1025,6 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
         if (apb->nbytes >= 2) {
             const short *src = (const short *)apb->samp;
             int nsamp = (int)apb->nbytes / 2;
-            int k;
 
             /* dup：驱动是否在重复投递同一块（过载征兆）；
              * zero：驱动是否欠载（生产慢于消费）。 */
@@ -1028,17 +1034,55 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
                 memcpy(prev_chunk, apb->samp, bsize);
             }
             if (got + nsamp * 2 <= want) {
-                memcpy(dst + got, apb->samp, nsamp * 2);
-                for (k = 0; k < nsamp; k++) {
-                    if (src[k] != 0) {
-                        if (k & 1)
-                            nz_odd++;
-                        else
-                            nz_even++;
+                /* g_hm_rx_normalize: 这里原来是一句整块 memcpy，把 I2S RX 的
+                 * 32 位「容器字」直接当成 16 位 PCM 交给上层。实测每个容器字
+                 * 里只有一个 16 位样点（另一半恒为 0），且同一个样点会在连续
+                 * 两个字里原值重复（游程直方图 93% 为长度 2，自然语音绝无此
+                 * 形态）=> 真实样点率只剩 1/4，还掺进一半静音。离线用服务端
+                 * ASR 判决：原样送出字符级相似度仅 3.6%，归一化后 48%。
+                 *
+                 * 逐字流式归一化三步：
+                 *   1) 每个 32 位字取非零半字 -> 一个样点（两半皆零给 0）
+                 *   2) 吃掉与上一个保留样点原值相同的重复（成对，只吃一次）
+                 *   3) 线性插值 x2：y[2n]=x[n]、y[2n+1]=(x[n]+x[n+1])/2，
+                 *      需要 1 个样点前瞻，故上一个保留样点留到下一轮才输出。
+                 * 输出 8000 Hz —— 云端 /v1/voice/utterance 只收 8000..48000。
+                 */
+                int nword = (int)apb->nbytes / 4;
+                int w;
+
+                for (w = 0; w < nword; w++) {
+                    int lo = (int)src[w * 2];
+                    int hi = (int)src[w * 2 + 1];
+                    int sv = (lo != 0) ? lo : ((hi != 0) ? hi : 0);
+
+                    if (lo != 0)
+                        nz_even++;
+                    if (hi != 0)
+                        nz_odd++;
+
+                    if (rx_have_last && sv == rx_last) {
+                        if (!rx_skipped) {
+                            rx_skipped = 1;
+                            continue;
+                        }
                     }
+                    rx_skipped = 0;
+
+                    if (rx_pend_valid) {
+                        if (got + 4 > want)
+                            break;
+                        *(short *)(dst + got) = (short)rx_pend;
+                        *(short *)(dst + got + 2) = (short)((rx_pend + sv) >> 1);
+                        got += 4;
+                        out_samp += 2;
+                    }
+                    rx_pend = sv;
+                    rx_pend_valid = 1;
+                    rx_last = sv;
+                    rx_have_last = 1;
+                    conv_samp++;
                 }
-                got += nsamp * 2;
-                out_samp += nsamp;
                 used++;
                 if (used == 1)
                     {
@@ -1111,6 +1155,8 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
            total_ms, steady_ms, g_hm_mic_rate_hz,
            nz_even, nz_odd, budget_ms, poll_to, gap_max,
            poll_wait_ms);
+    printf("[RXNORM] out=%d samples  raw_words=%d (kept) "
+           "nzLow=%d nzHigh=%d\n", out_samp, conv_samp, nz_even, nz_odd);
     fflush(stdout);
     return got;
 }
