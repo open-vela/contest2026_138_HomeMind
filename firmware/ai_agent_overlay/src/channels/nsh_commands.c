@@ -592,6 +592,11 @@ static void cmd_vision(int argc, char **argv)
 /* 听到提示音后再开麦的等待；太短会把提示音本身录进去。 */
 #define HM_WAKE_PROMPT_WAIT_MS 2200
 
+/* 实测麦克风采样率（Hz）。采集会话结束时更新；语音上报用它声明 rate
+ * 参数 —— 云端 local_asr.transcribe() 会把 PCM 按 rate 包成 WAV 交给
+ * faster-whisper 重采样，声明错速率 = 时间轴错 = 转写崩。 */
+static int g_hm_mic_rate_hz;
+
 /* 音频连续采集：2026-09-10 验证过的配方（单次 open + 640B 入队循环）。
  *
  * 关键教训：**不要每块重新 open**。nuttx/audio/audio.c 的 head/tail 记账在重新
@@ -695,6 +700,7 @@ static int hm_voice_utterance_roundtrip(void)
     size_t rlen = 0;
     int status;
     int pcm_len;
+    int mic_rate;
     int i;
 
     claw_config_get("media_host", host, sizeof(host));
@@ -715,7 +721,31 @@ static int hm_voice_utterance_roundtrip(void)
     printf("[Voice]: recording ~%ds, speak now...\n", HM_VOICE_SECONDS);
     hm_lcd_show_text("SPEAK NOW");
     pcm_len = hm_voice_record(pcm, HM_VOICE_SECONDS * 16000 * 2, 16000);
-    if (pcm_len < HM_VOICE_SECONDS * 16000) {
+    /* 用实测速率声明上传参数：云端按声明速率把 PCM 包成 WAV 再交给
+     * faster-whisper 重采样，声明错速率会让时间轴整体错掉。
+     * 实测值带抖动（usleep 按 tick 取整、块边界不对齐），吸附到最近的
+     * 标准采样率；云端 /v1/voice/utterance 只接受 8000..48000。 */
+    mic_rate = g_hm_mic_rate_hz > 0 ? g_hm_mic_rate_hz : 16000;
+    {
+        static const int k_std[] = { 8000, 11025, 12000, 16000, 22050,
+                                     24000, 32000, 44100, 48000 };
+        int best = k_std[0];
+        int bi;
+
+        for (bi = 0; bi < (int)(sizeof(k_std) / sizeof(k_std[0])); bi++) {
+            if (abs(mic_rate - k_std[bi]) < abs(mic_rate - best))
+                best = k_std[bi];
+        }
+        if (mic_rate >= 7000 && mic_rate <= 52000)
+            mic_rate = best;
+        if (mic_rate < 8000)
+            mic_rate = 8000;
+        if (mic_rate > 48000)
+            mic_rate = 48000;
+    }
+    printf("[Voice]: measured mic rate = %d Hz (raw %d)\n",
+           mic_rate, g_hm_mic_rate_hz);
+    if (pcm_len < mic_rate * HM_VOICE_SECONDS) {
         printf("[Voice-ERR]: captured too little (%d bytes)\n", pcm_len);
         hm_lcd_show_text("MIC ERR");
         hm_lcd_release();
@@ -728,25 +758,47 @@ static int hm_voice_utterance_roundtrip(void)
 
     /* 一步到位：家庭私有云本机 ASR + 语义规划 + 执行。
      * announce=0 —— 播报由端侧自己发起，避免同一条回复被云端与端侧播两遍。 */
-    snprintf(path, sizeof(path),
-             "/v1/voice/utterance?rate=16000&device_id=esp32s3-eye&announce=0");
     snprintf(auth, sizeof(auth), "Bearer %s", token);
-    status = vela_https_request(host, port, "POST", path, bin_hdr,
-                                (const char *)pcm, pcm_len,
-                                resp, sizeof(resp), &rlen);
-    if (rlen < sizeof(resp))
-        resp[rlen] = '\0';
-    else
-        resp[sizeof(resp) - 1] = '\0';
-    /* 请求已同步发送完毕，立即释放录音缓冲：
+    /* 采样率二次尝试。吸附档位本身是带抖动的估计，赌错一次整轮语音就
+     * 白做；而复核只需把同一段 PCM 重发一次，不必重新录音。
+     * 实测档是 16000 就用 8000 复核，否则用 16000 复核。 */
+    {
+        int rate_try[2];
+        int attempt;
+
+        rate_try[0] = mic_rate;
+        rate_try[1] = (mic_rate == 16000) ? 8000 : 16000;
+        for (attempt = 0; attempt < 2; attempt++) {
+            trans[0] = '\0';
+            snprintf(path, sizeof(path),
+                     "/v1/voice/utterance?rate=%d&device_id=esp32s3-eye"
+                     "&announce=0", rate_try[attempt]);
+            status = vela_https_request(host, port, "POST", path, bin_hdr,
+                                        (const char *)pcm, pcm_len,
+                                        resp, sizeof(resp), &rlen);
+            if (rlen < sizeof(resp))
+                resp[rlen] = '\0';
+            else
+                resp[sizeof(resp) - 1] = '\0';
+            if (status != 200) {
+                printf("[Voice-ERR]: utterance rate=%d http=%d "
+                       "body=%.200s\n", rate_try[attempt], status, resp);
+                continue;
+            }
+            hm_media_json_str(resp, "\"text\":\"", trans, sizeof(trans));
+            if (trans[0]) {
+                printf("[Voice]: recognised at %d Hz\n",
+                       rate_try[attempt]);
+                break;
+            }
+            printf("[Voice]: rate=%d -> asr_empty, retry\n",
+                   rate_try[attempt]);
+        }
+    }
+    /* 两次请求都已同步发送完毕，释放录音缓冲：
      * pcm 是 static 指针，成功路径若不释放会每轮语音泄漏约 96 KB。 */
     free(pcm);
     pcm = NULL;
-    if (status != 200) {
-        printf("[Voice-ERR]: utterance http=%d body=%.200s\n", status, resp);
-        return -1;
-    }
-    hm_media_json_str(resp, "\"text\":\"", trans, sizeof(trans));
     if (!trans[0]) {
         /* 云侧回 asr_empty：确实没听到人话，不算链路故障，不触发任何控制 */
         printf("[Voice]: no speech recognised (asr_empty)\n");
@@ -815,12 +867,26 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
     struct ap_buffer_info_s info;
     struct pollfd pfd;
     struct ap_buffer_s *apb = NULL;
+    struct timespec t_start;
+    struct timespec t_now;
     int bsize = 640;
     int got = 0;
     int fd;
     int started = 0;
     int chunk = 0;
     int used = 0;
+    int out_samp = 0;
+    int nz_even = 0;
+    int nz_odd = 0;
+    int zero_chunks = 0;
+    int dup_chunks = 0;
+    int budget_ms;
+    long elapsed_ms;
+    long total_ms;
+    long steady_ms;
+    int have_first = 0;
+    struct timespec t_first;
+    static unsigned char prev_chunk[640];
 
     fd = open(path, O_RDWR | O_NONBLOCK);
     if (fd < 0) {
@@ -839,6 +905,15 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
         return -1;
     }
     (void)ioctl(fd, AUDIOIOC_GETBUFFERINFO, (uintptr_t)&info);
+
+    /* 采集时长按"想要多少字节 / 每秒多少字节"反推，与驱动实际速率无关：
+     * want 字节 = rate*2 字节/秒 x 秒数。历史写法（写死块数上限）会让
+     * "改录音时长"变成静默失败。 */
+    budget_ms = (want * 1000) / (rate * 2);
+    if (budget_ms < 200)
+        budget_ms = 200;
+    memset(prev_chunk, 0, sizeof(prev_chunk));
+    clock_gettime(CLOCK_MONOTONIC, &t_start);
 
     memset(&pfd, 0, sizeof(pfd));
     pfd.fd = fd;
@@ -877,10 +952,43 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
              * 即 12000us 实际睡了 2 个 tick(20ms)。因此必须给 1 个 tick，
              * 否则消费端恒慢于生产端，采到的 PCM 会被丢样点（音频断续）。 */
             usleep(10000);
-        if (apb->nbytes > 0 && got + apb->nbytes <= want) {
-            memcpy(dst + got, apb->samp, apb->nbytes);
-            got += apb->nbytes;
-            used++;
+        /* 整块拷走。2026-09-16 实测（[STRM] nzL/nzR 相当）证明 RX 不是
+         * "右声道恒零"的交错流，去交错会丢掉一半真实样点，故不做。 */
+        if (apb->nbytes >= 2) {
+            const short *src = (const short *)apb->samp;
+            int nsamp = (int)apb->nbytes / 2;
+            int k;
+
+            /* dup：驱动是否在重复投递同一块（过载征兆）；
+             * zero：驱动是否欠载（生产慢于消费）。 */
+            if (apb->nbytes == (unsigned)bsize) {
+                if (chunk > 0 && memcmp(prev_chunk, apb->samp, bsize) == 0)
+                    dup_chunks++;
+                memcpy(prev_chunk, apb->samp, bsize);
+            }
+            if (got + nsamp * 2 <= want) {
+                memcpy(dst + got, apb->samp, nsamp * 2);
+                for (k = 0; k < nsamp; k++) {
+                    if (src[k] != 0) {
+                        if (k & 1)
+                            nz_odd++;
+                        else
+                            nz_even++;
+                    }
+                }
+                got += nsamp * 2;
+                out_samp += nsamp;
+                used++;
+                if (!have_first) {
+                    /* 稳态计时的基准：从第一块真正拿到数据之后起算，
+                     * 剔掉首次 poll 与串口打印的固定开销。 */
+                    clock_gettime(CLOCK_MONOTONIC, &t_first);
+                    have_first = 1;
+                }
+            }
+        }
+        else {
+            zero_chunks++;
         }
         chunk++;
         if (chunk <= 4 || chunk % 10 == 0)
@@ -895,12 +1003,43 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
          * （=128000B=4 秒）会让"改录音时长"变成静默失败；改按目标字节数
          * 推导后又发现空块会提前吃掉预算，所以这里统一用 used。
          * 绝对上限给 3 倍块数兜底，避免驱动异常时死等。 */
-        if (used >= (want / bsize) || chunk > (want / bsize) * 3 + 60)
+        /* 退出：墙钟预算用尽或输出已填满。历史教训——写死块数上限会让
+         * "改录音时长"变成静默失败（见 2026-09-15 取证）。 */
+        clock_gettime(CLOCK_MONOTONIC, &t_now);
+        elapsed_ms = (long)(t_now.tv_sec - t_start.tv_sec) * 1000L +
+                     (long)(t_now.tv_nsec - t_start.tv_nsec) / 1000000L;
+        if (elapsed_ms >= (long)budget_ms || got >= want)
+            break;
+        if (chunk > 4000)
             break;
     }
     if (started)
         ioctl(fd, AUDIOIOC_STOP, 0);
     close(fd);
+    clock_gettime(CLOCK_MONOTONIC, &t_now);
+    total_ms = (long)(t_now.tv_sec - t_start.tv_sec) * 1000L +
+               (long)(t_now.tv_nsec - t_start.tv_nsec) / 1000000L;
+    /* 采样率只按**稳态**估：整段墙钟当分母会含首次 poll 与串口打印的
+     * 固定开销，2 秒采集实测 13280 Hz、3 秒实测 15573 Hz —— 同样硬件
+     * 只因为开销占比不同。被压低后会吸附到 12000 而不是 16000。 */
+    {
+        struct timespec t_base = have_first ? t_first : t_start;
+        long n_samp = (long)out_samp - (have_first ? (bsize / 2) : 0);
+
+        steady_ms = (long)(t_now.tv_sec - t_base.tv_sec) * 1000L +
+                    (long)(t_now.tv_nsec - t_base.tv_nsec) / 1000000L;
+        if (n_samp < 0)
+            n_samp = 0;
+        if (steady_ms > 0)
+            g_hm_mic_rate_hz = (int)(n_samp * 1000L / steady_ms);
+    }
+    printf("[STRM] out=%d bytes (%d samples) chunks=%d zero=%d dup=%d "
+           "ms=%ld steady_ms=%ld eff_rate=%d Hz nzE=%d nzO=%d "
+           "budget=%d ms\n",
+           got, out_samp, chunk, zero_chunks, dup_chunks,
+           total_ms, steady_ms, g_hm_mic_rate_hz,
+           nz_even, nz_odd, budget_ms);
+    fflush(stdout);
     return got;
 }
 

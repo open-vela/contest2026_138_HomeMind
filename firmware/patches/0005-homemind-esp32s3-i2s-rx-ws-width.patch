@@ -1,0 +1,28 @@
+--- a/arch/xtensa/src/esp32s3/esp32s3_i2s.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_i2s.c
+@@ -1848,18 +1848,22 @@
+                   FIELD_TO_VALUE(I2S_RX_HALF_SAMPLE_BITS,
+                   priv->data_width - 1));
+ 
++      /* HomeMind WS width fix: RX 的 WS 宽度原实现与 TX 相反 —— 标准
++       * Philips I2S 下 WS 必须高电平半个帧（= data_width 个 BCLK），
++       * 写成 2 个 BCLK 会让 I2S 数字麦无法帧同步、SDOUT 停在空闲电平，
++       * 实测只能采到恒定样点（0 与 -16384）。这里与 TX 分支保持一致。 */
+       if (priv->config->audio_std_mode == I2S_TDM_PCM)
+         {
+           modifyreg32(I2S_RX_CONF1_REG(priv->config->port),
+                       I2S_RX_TDM_WS_WIDTH_M,
+-                      FIELD_TO_VALUE(I2S_RX_TDM_WS_WIDTH,
+-                      priv->data_width - 1));
++                      FIELD_TO_VALUE(I2S_RX_TDM_WS_WIDTH, 1));
+         }
+       else
+         {
+           modifyreg32(I2S_RX_CONF1_REG(priv->config->port),
+                       I2S_RX_TDM_WS_WIDTH_M,
+-                      FIELD_TO_VALUE(I2S_RX_TDM_WS_WIDTH, 1));
++                      FIELD_TO_VALUE(I2S_RX_TDM_WS_WIDTH,
++                      priv->data_width - 1));
+         }
+     }
+ #endif /* I2S_HAVE_RX */
