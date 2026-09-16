@@ -158,6 +158,7 @@ static void cmd_help(void)
         "  voice_test_asr <file>  - Test ASR recognition\n"
         "  media_probe [jpeg]   - Probe OV2640 RGB565 frame + I2S mic (jpeg: only if sensor supports it)\n"
         "  audio_stream [sec]     - Continuous PCM capture via audio_capture API\n"
+        "  i2sknob [half bitsmod chanbits ws totchan dbg] - I2S RX 寄存器旋钮(-1=原行为)\n"
         "  wake_loop [sec] [thr] [hold] - Energy VAD wake + LED blink\n"
         "  wake_kws [thr] - Hello openvela KWS score + LED\n"
         "  kws_listen start|stop|status [thr] [vad_thr] - Continuous offline KWS\n"
@@ -859,6 +860,39 @@ static void cmd_voice(int argc, char **argv)
 /* Single-session streaming: enqueue, wait, copy, free, repeat.
  * audio_poll only waits correctly for the first buffer; later waits use
  * usleep (640B@16kHz ≈ 20ms). Recycle APBs to stay within MAXINFLIGHT=4. */
+/* ============ HM_AUDIO_RATEPROBE ============
+ * 驱动侧（补丁 0006）导出的运行时旋钮。默认全 -1 = 保持原行为。
+ * 目的：把"RX 每帧几个 slot / 采样字宽 / WS 宽度"这类纸面推不出来的
+ * 问题，变成一组可实测的配置扫描，避免反复刷写。 */
+extern int g_hm_i2s_rx_dbg;
+extern int g_hm_i2s_rx_half_bits;
+extern int g_hm_i2s_rx_bits_mod;
+extern int g_hm_i2s_rx_chan_bits;
+extern int g_hm_i2s_rx_ws_width;
+extern int g_hm_i2s_rx_tot_chan;
+
+static void cmd_i2sknob(int argc, char **argv)
+{
+    if (argc > 1)
+        g_hm_i2s_rx_half_bits = atoi(argv[1]);
+    if (argc > 2)
+        g_hm_i2s_rx_bits_mod = atoi(argv[2]);
+    if (argc > 3)
+        g_hm_i2s_rx_chan_bits = atoi(argv[3]);
+    if (argc > 4)
+        g_hm_i2s_rx_ws_width = atoi(argv[4]);
+    if (argc > 5)
+        g_hm_i2s_rx_tot_chan = atoi(argv[5]);
+    if (argc > 6)
+        g_hm_i2s_rx_dbg = atoi(argv[6]);
+    printf("[I2SKNOB] half=%d bitsmod=%d chanbits=%d ws=%d totchan=%d dbg=%d "
+           "(-1=保持原行为)\n",
+           g_hm_i2s_rx_half_bits, g_hm_i2s_rx_bits_mod,
+           g_hm_i2s_rx_chan_bits, g_hm_i2s_rx_ws_width,
+           g_hm_i2s_rx_tot_chan, g_hm_i2s_rx_dbg);
+    fflush(stdout);
+}
+
 static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
 {
     const char *path = "/dev/audio/pcm_in0";
@@ -886,6 +920,10 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
     long steady_ms;
     int have_first = 0;
     struct timespec t_first;
+    int poll_to = 0;
+    long gap_ms = 0;
+    long gap_max = 0;
+    long poll_wait_ms = 0;
     static unsigned char prev_chunk[640];
 
     fd = open(path, O_RDWR | O_NONBLOCK);
@@ -946,12 +984,35 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
         if (chunk == 0)
             poll(&pfd, 1, 800);
         else
-            /* 640B @16kHz/16bit 单声道 = 20ms 音频，所以每块最多只能等 20ms。
-             * NuttX 的 CONFIG_USEC_PER_TICK=10000，usleep 按 tick 向上取整：
-             * 实测 usleep(30000)->每块 39ms、usleep(12000)->每块 29ms，
-             * 即 12000us 实际睡了 2 个 tick(20ms)。因此必须给 1 个 tick，
-             * 否则消费端恒慢于生产端，采到的 PCM 会被丢样点（音频断续）。 */
-            usleep(10000);
+            {
+                /* 2026-09-16 定论：这里原本是固定 `usleep(10000)`（=1 个
+                 * tick）。CONFIG_USEC_PER_TICK=10000 使 usleep 按 tick 向上
+                 * 取整，于是消费速率被死锁在 640B/20ms = 32kB/s。
+                 * 实测 5 秒只拿到 226 块（22.0ms/块）、eff_rate=14457Hz ——
+                 * 历史上一度把这个数字当成"硬件采样率实测值"，其实是
+                 * **消费循环自己的上限**。硬件产得更快时，APB 池（MAXINFLIGHT）
+                 * 填满，整条链路被反压，中间必然丢样点。
+                 * 改成按数据到达驱动：等 POLLIN（驱动填满一块才置位），
+                 * 消费端就永远不会反过来给生产者限速。 */
+                struct timespec ta;
+                struct timespec tb;
+
+                clock_gettime(CLOCK_MONOTONIC, &ta);
+                /* 2026-09-16 实测：把这里换成 `poll(&pfd,1,200)` 会让本驱动
+                 * 立刻回"POLLIN 但 apb->nbytes=0"（因为每轮都新分配 APB，
+                 * 完成队列头部的缓冲并不是本轮这个），随后缓冲池耗尽、
+                 * AUDIOIOC_ALLOCBUFFER 永久阻塞 —— 实测卡在第 5 块。
+                 * 而 [STRM] 又证明消费端不是瓶颈（生产 640B/22ms 慢于
+                 * 消费 640B/10ms），所以这里维持已知可用的 usleep(1 tick)，
+                 * 只加计时把"到底谁慢"量化出来。 */
+                usleep(10000);
+                clock_gettime(CLOCK_MONOTONIC, &tb);
+                gap_ms = (long)(tb.tv_sec - ta.tv_sec) * 1000L +
+                         (long)(tb.tv_nsec - ta.tv_nsec) / 1000000L;
+                poll_wait_ms += gap_ms;
+                if (gap_ms > gap_max)
+                    gap_max = gap_ms;
+            }
         /* 整块拷走。2026-09-16 实测（[STRM] nzL/nzR 相当）证明 RX 不是
          * "右声道恒零"的交错流，去交错会丢掉一半真实样点，故不做。 */
         if (apb->nbytes >= 2) {
@@ -979,6 +1040,16 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
                 got += nsamp * 2;
                 out_samp += nsamp;
                 used++;
+                if (used == 1)
+                    {
+                        int q;
+                        printf("[STRM-RAW] nbytes=%u first24:",
+                               (unsigned)apb->nbytes);
+                        for (q = 0; q < 24 && q < nsamp; q++)
+                            printf(" %d", (int)src[q]);
+                        printf("\n");
+                        fflush(stdout);
+                    }
                 if (!have_first) {
                     /* 稳态计时的基准：从第一块真正拿到数据之后起算，
                      * 剔掉首次 poll 与串口打印的固定开销。 */
@@ -1035,10 +1106,11 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
     }
     printf("[STRM] out=%d bytes (%d samples) chunks=%d zero=%d dup=%d "
            "ms=%ld steady_ms=%ld eff_rate=%d Hz nzE=%d nzO=%d "
-           "budget=%d ms\n",
+           "budget=%d ms tmo=%d gap_max=%ld poll_wait=%ld ms\n",
            got, out_samp, chunk, zero_chunks, dup_chunks,
            total_ms, steady_ms, g_hm_mic_rate_hz,
-           nz_even, nz_odd, budget_ms);
+           nz_even, nz_odd, budget_ms, poll_to, gap_max,
+           poll_wait_ms);
     fflush(stdout);
     return got;
 }
@@ -3835,6 +3907,8 @@ static void* cli_thread(void* arg)
             cmd_media_probe(argc, argv);
         else if (strcmp(cmd, "audio_stream") == 0)
             cmd_audio_stream(argc, argv);
+        else if (strcmp(cmd, "i2sknob") == 0)
+            cmd_i2sknob(argc, argv);
         else if (strcmp(cmd, "wake_loop") == 0)
             cmd_wake_loop(argc, argv);
         else if (strcmp(cmd, "wake_kws") == 0)
