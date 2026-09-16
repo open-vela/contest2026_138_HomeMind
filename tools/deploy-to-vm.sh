@@ -13,6 +13,7 @@ NUTTX_PATCH="$PROJECT_ROOT/firmware/patches/0001-homemind-esp32s3-nuttx.patch"
 NUTTX_MEDIA_PATCH="$PROJECT_ROOT/firmware/patches/0002-homemind-esp32s3-eye-media.patch"
 NUTTX_MEDIA_REPAIR_PATCH="$PROJECT_ROOT/firmware/patches/0003-repair-eye-bringup-media-placement.patch"
 NUTTX_I2S_PATCH="$PROJECT_ROOT/firmware/patches/0004-homemind-esp32s3-i2s-audio-buffer-info.patch"
+NUTTX_I2S_WS_PATCH="$PROJECT_ROOT/firmware/patches/0005-homemind-esp32s3-i2s-rx-ws-width.patch"
 NUTTX_MEDIA_SOURCE="$PROJECT_ROOT/firmware/nuttx_media/esp32s3_board_camera.c"
 NUTTX_MEDIA_DEST="$OPENVELA_ROOT/nuttx/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_board_camera.c"
 
@@ -94,6 +95,47 @@ apply_optional_nuttx_patch() {
 apply_nuttx_patch "HomeMind NuttX patch" "$NUTTX_PATCH"
 apply_optional_nuttx_patch "EYE bringup placement repair" "$NUTTX_MEDIA_REPAIR_PATCH"
 apply_nuttx_patch "HomeMind EYE media patch" "$NUTTX_MEDIA_PATCH"
+
+# 0004/0005 记录的是"先手工改 live 树、再回填成补丁"的改动。这里**不能**
+# 用 apply_optional_nuttx_patch：live 树被手工改过后 `patch --forward` 的
+# dry-run 反而会成功，于是同一个 hunk 被重复打进文件 —— 2026-09-16 实测把
+# 0004 打了三份（显式 deploy 一次 + build 内部又 deploy 一次），
+# esp32s3_i2s.c 出现 duplicate case，编译直接失败。改成"先看标记、缺了才
+# 打、打完再验标记"的幂等逻辑。
+I2S_DRIVER="$OPENVELA_ROOT/nuttx/arch/xtensa/src/esp32s3/esp32s3_i2s.c"
+
+ensure_marker_patch() {
+    local label="$1"
+    local patch_file="$2"
+    local marker="$3"
+    local target="$4"
+
+    [ -f "$patch_file" ] || fail "patch not found: $patch_file"
+    [ -f "$target" ] || fail "patch target not found: $target"
+
+    if grep -q "$marker" "$target"; then
+        printf '[INFO] %s already present\n' "$label"
+        return 0
+    fi
+
+    printf '[INFO] Applying %s\n' "$label"
+    patch --batch --forward -d "$OPENVELA_ROOT/nuttx" -p1 --silent \
+        < "$patch_file" || fail "could not apply $label"
+    grep -q "$marker" "$target" ||
+        fail "$label reported success but the marker is missing in $target"
+    printf '[INFO] %s applied and verified\n' "$label"
+}
+
+ensure_marker_patch "HomeMind I2S audio buffer info" "$NUTTX_I2S_PATCH" \
+    "AUDIOIOC_GETBUFFERINFO" "$I2S_DRIVER"
+ensure_marker_patch "HomeMind I2S RX WS width" "$NUTTX_I2S_WS_PATCH" \
+    "HomeMind WS width fix" "$I2S_DRIVER"
+
+# 兜底：case 必须恰好 1 个，重复注入会直接毁掉编译。
+n_i2s_case=$(grep -c "case AUDIOIOC_GETBUFFERINFO" "$I2S_DRIVER" || true)
+[ "$n_i2s_case" = "1" ] ||
+    fail "expected exactly one AUDIOIOC_GETBUFFERINFO case, found $n_i2s_case"
+printf '[INFO] I2S driver patches verified\n'
 
 install -D -m 0644 "$NUTTX_MEDIA_SOURCE" "$NUTTX_MEDIA_DEST"
 printf '[INFO] Installed EYE camera board source\n'
