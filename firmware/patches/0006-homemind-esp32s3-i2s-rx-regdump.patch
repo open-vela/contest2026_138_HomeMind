@@ -1,0 +1,164 @@
+--- a/arch/xtensa/src/esp32s3/esp32s3_i2s.c
++++ b/arch/xtensa/src/esp32s3/esp32s3_i2s.c
+@@ -1791,6 +1791,88 @@
+  *
+  ****************************************************************************/
+ 
++
++/* ===================== HM_I2S_RX_DIAG =====================
++ * HomeMind I2S RX 诊断（补丁 0006）。
++ *
++ * 起因：同一块板子上，静态分析给出互相矛盾的结论 ——
++ *   * `i2s_set_clock()` 按 `bclk = rate * total_slot(2) * data_width` 推 BCLK，
++ *     即"每帧 2 slot"；
++ *   * `i2s_rxchannels()` 从不写 `I2S_RX_TDM_TOT_CHAN_NUM`，复位值是 0
++ *     （= 总通道数 1），即"每帧 1 slot"；
++ *   * 而实测抓回的 PCM 呈 `[s,0,s,0]`（一个真实样点占 4 个 int16）。
++ * 三者在纸面上无法调和，只能把寄存器原文打出来对账。
++ *
++ * 下面几个全局量同时充当运行时旋钮：默认 -1 = 完全保持原行为，
++ * 由 App 侧在开会话前赋值即可扫参数，不必反复刷写。
++ * 取值语义见 tools/deploy-to-vm.sh 与 docs/evidence/。
++ */
++int g_hm_i2s_rx_dbg       = 1;   /* 1 = RX 启动时打印寄存器 */
++int g_hm_i2s_rx_half_bits = -1;  /* -1 = data_width-1 */
++int g_hm_i2s_rx_bits_mod  = -1;  /* -1 = data_width-1 */
++int g_hm_i2s_rx_chan_bits = -1;  /* -1 = data_width-1 */
++int g_hm_i2s_rx_ws_width  = -1;  /* -1 = data_width-1 */
++int g_hm_i2s_rx_tot_chan  = -1;  /* -1 = 不写（保持复位默认） */
++
++#define HM_RX_FIELD(knob, p) \
++  ((uint32_t)((knob) >= 0 ? (knob) : ((p)->data_width - 1)))
++#define HM_RX_BITS_MOD(p)   HM_RX_FIELD(g_hm_i2s_rx_bits_mod,  (p))
++#define HM_RX_CHAN_BITS(p)  HM_RX_FIELD(g_hm_i2s_rx_chan_bits, (p))
++#define HM_RX_HALF_BITS(p)  HM_RX_FIELD(g_hm_i2s_rx_half_bits, (p))
++#define HM_RX_WS_WIDTH(p)   HM_RX_FIELD(g_hm_i2s_rx_ws_width,  (p))
++
++static void hm_i2s_rx_dump(struct esp32s3_i2s_s *priv, const char *tag)
++{
++  uint32_t port = priv->config->port;
++  uint32_t c   = getreg32(I2S_RX_CONF_REG(port));
++  uint32_t c1  = getreg32(I2S_RX_CONF1_REG(port));
++  uint32_t td  = getreg32(I2S_RX_TDM_CTRL_REG(port));
++  uint32_t ck  = getreg32(I2S_RX_CLKM_CONF_REG(port));
++  uint32_t cd  = getreg32(I2S_RX_CLKM_DIV_CONF_REG(port));
++  unsigned g0 = 0;
++  unsigned g1 = 0;
++
++#ifdef DMA_IN_CONF1_CH0_REG
++  g0 = (unsigned)getreg32(DMA_IN_CONF0_CH0_REG);
++  g1 = (unsigned)getreg32(DMA_IN_CONF1_CH0_REG);
++#endif
++
++  printf("[I2SDBG %s] port=%u dw=%u slot=%u rate=%u mclk=%u ch=%u role=%u mode=%u\n",
++         tag, (unsigned)port, (unsigned)priv->data_width,
++         (unsigned)priv->config->total_slot, (unsigned)priv->rate,
++         (unsigned)priv->mclk_freq, (unsigned)priv->channels,
++         (unsigned)priv->config->role,
++         (unsigned)priv->config->audio_std_mode);
++  printf("[I2SDBG %s] RX_CONF=%08x CONF1=%08x TDMCTRL=%08x CLKM=%08x CLKDIV=%08x\n",
++         tag, (unsigned)c, (unsigned)c1, (unsigned)td, (unsigned)ck,
++         (unsigned)cd);
++  printf("[I2SDBG %s] TDM_EN=%u WS_WIDTH=%u BITS_MOD=%u CHAN_BITS=%u "
++         "HALF_BITS=%u TOT_CHAN=%u MONO=%u SLAVE=%u MSBSHIFT=%u BIGEND=%u\n",
++         tag,
++         (unsigned)((c >> I2S_RX_TDM_EN_S) & 0x1u),
++         (unsigned)((c1 >> I2S_RX_TDM_WS_WIDTH_S) & I2S_RX_TDM_WS_WIDTH_V),
++         (unsigned)((c1 >> I2S_RX_BITS_MOD_S) & I2S_RX_BITS_MOD_V),
++         (unsigned)((c1 >> I2S_RX_TDM_CHAN_BITS_S) & I2S_RX_TDM_CHAN_BITS_V),
++         (unsigned)((c1 >> I2S_RX_HALF_SAMPLE_BITS_S) & I2S_RX_HALF_SAMPLE_BITS_V),
++         (unsigned)((td >> I2S_RX_TDM_TOT_CHAN_NUM_S) & I2S_RX_TDM_TOT_CHAN_NUM_V),
++         (unsigned)((c >> I2S_RX_MONO_S) & 0x1u),
++         (unsigned)((c >> I2S_RX_SLAVE_MOD_S) & 0x1u),
++         (unsigned)((c1 >> I2S_RX_MSB_SHIFT_S) & 0x1u),
++         (unsigned)((c >> I2S_RX_BIG_ENDIAN_S) & 0x1u));
++  printf("[I2SDBG %s] BCK_DIV=%u CLKM_DIV=%u GDMA_IN0=%08x GDMA_IN1=%08x "
++         "| knobs half=%d bitsmod=%d chanbits=%d ws=%d totchan=%d\n",
++         tag,
++         (unsigned)((c1 >> I2S_RX_BCK_DIV_NUM_S) & I2S_RX_BCK_DIV_NUM_V),
++         (unsigned)((ck >> I2S_RX_CLKM_DIV_NUM_S) & I2S_RX_CLKM_DIV_NUM_V),
++         g0, g1,
++         g_hm_i2s_rx_half_bits, g_hm_i2s_rx_bits_mod, g_hm_i2s_rx_chan_bits,
++         g_hm_i2s_rx_ws_width, g_hm_i2s_rx_tot_chan);
++  fflush(stdout);
++}
++/* =================== /HM_I2S_RX_DIAG =================== */
++
++#include <stdio.h>
++
+ static uint32_t i2s_set_datawidth(struct esp32s3_i2s_s *priv)
+ {
+ #ifdef I2S_HAVE_TX
+@@ -1836,17 +1918,17 @@
+     {
+       modifyreg32(I2S_RX_CONF1_REG(priv->config->port),
+                   I2S_RX_BITS_MOD_M, FIELD_TO_VALUE(I2S_RX_BITS_MOD,
+-                  priv->data_width - 1));
++                  HM_RX_BITS_MOD(priv)));
+ 
+       modifyreg32(I2S_RX_CONF1_REG(priv->config->port),
+                   I2S_RX_TDM_CHAN_BITS_M,
+                   FIELD_TO_VALUE(I2S_RX_TDM_CHAN_BITS,
+-                  priv->data_width - 1));
++                  HM_RX_CHAN_BITS(priv)));
+ 
+       modifyreg32(I2S_RX_CONF1_REG(priv->config->port),
+                   I2S_RX_HALF_SAMPLE_BITS_M,
+                   FIELD_TO_VALUE(I2S_RX_HALF_SAMPLE_BITS,
+-                  priv->data_width - 1));
++                  HM_RX_HALF_BITS(priv)));
+ 
+       /* HomeMind WS width fix: RX 的 WS 宽度原实现与 TX 相反 —— 标准
+        * Philips I2S 下 WS 必须高电平半个帧（= data_width 个 BCLK），
+@@ -1863,7 +1945,7 @@
+           modifyreg32(I2S_RX_CONF1_REG(priv->config->port),
+                       I2S_RX_TDM_WS_WIDTH_M,
+                       FIELD_TO_VALUE(I2S_RX_TDM_WS_WIDTH,
+-                      priv->data_width - 1));
++                      HM_RX_WS_WIDTH(priv)));
+         }
+     }
+ #endif /* I2S_HAVE_RX */
+@@ -2210,6 +2292,11 @@
+ 
+       priv->rx_started = true;
+ 
++      if (g_hm_i2s_rx_dbg)
++        {
++          hm_i2s_rx_dump(priv, "rxstart");
++        }
++
+       i2sinfo("Started RX channel of port %d\n", priv->config->port);
+     }
+ }
+@@ -2575,6 +2662,30 @@
+         }
+ 
+       priv->channels = channels;
++
++      /* HM_I2S_RX_DIAG: TX 侧会写 I2S_TX_TDM_TOT_CHAN_NUM，RX 侧此前
++       * 一个字都没写 —— 寄存器停在复位默认值（TOT_CHAN_NUM=0，即
++       * "总 1 通道"），与 i2s_set_clock() 按 total_slot=2 推 BCLK 的
++       * 假设直接冲突。这里补上，并允许 App 用 g_hm_i2s_rx_tot_chan
++       * 覆盖（-1 = 保持原行为，即不写）。 */
++
++      if (g_hm_i2s_rx_tot_chan >= 0)
++        {
++          modifyreg32(I2S_RX_TDM_CTRL_REG(priv->config->port),
++                      I2S_RX_TDM_TOT_CHAN_NUM_M,
++                      FIELD_TO_VALUE(I2S_RX_TDM_TOT_CHAN_NUM,
++                                     g_hm_i2s_rx_tot_chan));
++          modifyreg32(I2S_RX_CONF_REG(priv->config->port), 0, I2S_RX_UPDATE);
++        }
++      else
++        {
++          printf("[I2SDBG rxchannels] TOT_CHAN 保持复位默认=%u\n",
++                 (unsigned)((getreg32(I2S_RX_TDM_CTRL_REG(
++                     priv->config->port)) >>
++                     I2S_RX_TDM_TOT_CHAN_NUM_S) &
++                     I2S_RX_TDM_TOT_CHAN_NUM_V));
++        }
++
+       return OK;
+     }
+ 

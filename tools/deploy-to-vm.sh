@@ -14,6 +14,7 @@ NUTTX_MEDIA_PATCH="$PROJECT_ROOT/firmware/patches/0002-homemind-esp32s3-eye-medi
 NUTTX_MEDIA_REPAIR_PATCH="$PROJECT_ROOT/firmware/patches/0003-repair-eye-bringup-media-placement.patch"
 NUTTX_I2S_PATCH="$PROJECT_ROOT/firmware/patches/0004-homemind-esp32s3-i2s-audio-buffer-info.patch"
 NUTTX_I2S_WS_PATCH="$PROJECT_ROOT/firmware/patches/0005-homemind-esp32s3-i2s-rx-ws-width.patch"
+NUTTX_I2S_DBG_PATCH="$PROJECT_ROOT/firmware/patches/0006-homemind-esp32s3-i2s-rx-regdump.patch"
 NUTTX_MEDIA_SOURCE="$PROJECT_ROOT/firmware/nuttx_media/esp32s3_board_camera.c"
 NUTTX_MEDIA_DEST="$OPENVELA_ROOT/nuttx/boards/xtensa/esp32s3/esp32s3-eye/src/esp32s3_board_camera.c"
 
@@ -27,6 +28,7 @@ fail() {
 [ -f "$NUTTX_PATCH" ] || fail "NuttX patch not found: $NUTTX_PATCH"
 [ -f "$NUTTX_MEDIA_PATCH" ] || fail "NuttX media patch not found: $NUTTX_MEDIA_PATCH"
 [ -f "$NUTTX_MEDIA_REPAIR_PATCH" ] || fail "NuttX media repair patch not found: $NUTTX_MEDIA_REPAIR_PATCH"
+[ -f "$NUTTX_I2S_DBG_PATCH" ] || fail "NuttX I2S regdump patch not found: $NUTTX_I2S_DBG_PATCH"
 [ -f "$NUTTX_MEDIA_SOURCE" ] || fail "NuttX camera source not found: $NUTTX_MEDIA_SOURCE"
 
 overlay_files=(
@@ -130,11 +132,18 @@ ensure_marker_patch "HomeMind I2S audio buffer info" "$NUTTX_I2S_PATCH" \
     "AUDIOIOC_GETBUFFERINFO" "$I2S_DRIVER"
 ensure_marker_patch "HomeMind I2S RX WS width" "$NUTTX_I2S_WS_PATCH" \
     "HomeMind WS width fix" "$I2S_DRIVER"
+ensure_marker_patch "HomeMind I2S RX regdump" "$NUTTX_I2S_DBG_PATCH" \
+    "HM_I2S_RX_DIAG" "$I2S_DRIVER"
 
 # 兜底：case 必须恰好 1 个，重复注入会直接毁掉编译。
 n_i2s_case=$(grep -c "case AUDIOIOC_GETBUFFERINFO" "$I2S_DRIVER" || true)
 [ "$n_i2s_case" = "1" ] ||
     fail "expected exactly one AUDIOIOC_GETBUFFERINFO case, found $n_i2s_case"
+
+# 同理：0006 的诊断块只准出现一次。
+n_i2s_dbg=$(grep -c "/HM_I2S_RX_DIAG" "$I2S_DRIVER" || true)
+[ "$n_i2s_dbg" = "1" ] ||
+    fail "expected exactly 1 closing HM_I2S_RX_DIAG marker, found $n_i2s_dbg"
 printf '[INFO] I2S driver patches verified\n'
 
 install -D -m 0644 "$NUTTX_MEDIA_SOURCE" "$NUTTX_MEDIA_DEST"
