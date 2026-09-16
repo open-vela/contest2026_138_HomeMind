@@ -88,7 +88,10 @@
 
 static const char* TAG = "cli";
 
-#define MAX_ARGS 8
+/* MAX_ARGS 8 会让第 9 个及以后的 token 被**静默**丢掉（tokenise 里是
+ * `argc < max_argc` 截断，不报错），i2sknob 的 micrate/loopus 一度因此
+ * 看起来像没接上。提到 12：argv 是 CLI 线程的局部数组，只多 32 字节栈。 */
+#define MAX_ARGS 12
 #define LINE_LEN 256
 
 /* Temporary TLS transport diagnostic implemented in vela_tls.c. */
@@ -158,7 +161,8 @@ static void cmd_help(void)
         "  voice_test_asr <file>  - Test ASR recognition\n"
         "  media_probe [jpeg]   - Probe OV2640 RGB565 frame + I2S mic (jpeg: only if sensor supports it)\n"
         "  audio_stream [sec]     - Continuous PCM capture via audio_capture API\n"
-        "  i2sknob [half bitsmod chanbits ws totchan dbg] - I2S RX 寄存器旋钮(-1=原行为)\n"
+        "  i2sknob [half bitsmod chanbits ws totchan dbg micrate loopus]\n"
+        "           - I2S RX 寄存器/时钟旋钮(-1=原行为)；micrate=硬件请求速率，loopus=采集循环步长us\n"
         "  wake_loop [sec] [thr] [hold] - Energy VAD wake + LED blink\n"
         "  wake_kws [thr] - Hello openvela KWS score + LED\n"
         "  kws_listen start|stop|status [thr] [vad_thr] - Continuous offline KWS\n"
@@ -606,6 +610,40 @@ static int g_hm_mic_rate_hz;
  * "每块 open->config->alloc->enqueue->start->排空->stop->free->close" 的保底
  * 形态，2026-09-10 查明该形态已被上述 bug 破坏（实机复现 "captured 640 bytes /
  * captured too little"），因此改为直接复用 hm_audio_stream_session。 */
+/* 麦克风取样率：2026-09-16 用 [STRM-RAW] 原始转储重新定案。
+ *
+ * 铁证：原始 16bit 字序列恒为 `X 0 X 0 X 0 ...` —— 每 32bit 容器里只有一个
+ * 真实样点，高半字恒 0（跨 8 个会话、几十次转储无一例外）。640B/20ms 的块
+ * 大小 => 160 个容器/块 => **容器率 8000/s**，而请求速率是 16000。
+ *
+ * 差 2 倍的原因在 slot 宽度，不在 XTAL：驱动按 `bclk = rate x 2ch x 16bit`
+ * = 512kHz 算分频，但 RX 实际按 32bit 容器取数 => 每帧 64 个 BCLK =>
+ * 硬件把 WS 定成 512k/64 = 8000Hz，麦克风就真的按 8000Hz 采样。
+ * 想把 WS 顶到 16000Hz，必须让 BCLK = 1.024MHz，即把请求速率抬到 32000。
+ *
+ * 但**单独抬请求速率测不出来**：消费循环每轮只回收 1 个 APB（640B），步长
+ * usleep(10000) 受 CONFIG_USEC_PER_TICK=10000 影响实测 ~20ms/轮 =>
+ * 上限 32kB/s = 8000 容器/s，恰好等于 8kHz 的产率。这就是历史上「rate 不是
+ * 杠杆」这个错误结论的来源 —— 消费端把生产端卡住了，产率翻倍也看不见。
+ * 所以两者必须一起调，做成同一组旋钮（见 MIC_KNOBS）。 */
+#define HM_MIC_HW_RATE_HZ  16000   /* 编译期默认值；运行时看 g_hm_mic_hw_rate */
+#define HM_MIC_OUT_RATE_HZ 16000
+
+/* MIC_KNOBS: 硬件请求速率 / 消费循环步长（2026-09-16 引入，运行时旋钮）
+ *
+ * 这两个参数必须**一起**调，单独调任何一个都测不出真相：
+ *   - BCLK = hwrate x 2ch x 16bit（驱动按 16bit slot 算），而 RX 实际按
+ *     32bit 容器取数 => 每帧 64 个 BCLK => 实际 WS = hwrate/2。想让麦克风
+ *     真的跑 16000Hz，必须把请求速率抬到 32000。
+ *   - 消费循环每轮只回收 1 个 APB（640B），步长 loop_us 决定上限
+ *     (640B/loop_us)。usleep 受 CONFIG_USEC_PER_TICK=10000 影响，实测
+ *     usleep(10000) ~= 20ms/轮 => 上限 32kB/s = 8000 容器/s，恰好等于
+ *     8kHz 的产率；此时请求速率翻倍只会取到过期缓冲，实测看不出变化。
+ *
+ * 默认值 = 历史行为（16000 / 10000us），未显式设置时与改动前完全一致。 */
+int g_hm_mic_hw_rate = 16000;
+int g_hm_mic_loop_us = 10000;
+
 static int hm_audio_stream_session(unsigned char *dst, int want, int rate);
 
 static int hm_voice_record(unsigned char *buf, int want_bytes, int rate)
@@ -675,14 +713,15 @@ static void hm_voice_wake_prompt(void)
     fflush(stdout);
 }
 
-static int hm_voice_utterance_roundtrip(void)
+/* g_hm_voice_busy: 原实现，外层由 hm_voice_utterance_roundtrip() 做重入保护 */
+static int hm_voice_utterance_roundtrip_once(void)
 {
     char host[64] = "192.168.31.251";
     char port[8] = "443";
     char token[128] = "";
     char auth[224];
     char path[128];
-    static unsigned char *pcm;
+    unsigned char *pcm = NULL;
     static char resp[4096];
     char *body = NULL;
     char trans[512];
@@ -721,7 +760,8 @@ static int hm_voice_utterance_roundtrip(void)
     }
     printf("[Voice]: recording ~%ds, speak now...\n", HM_VOICE_SECONDS);
     hm_lcd_show_text("SPEAK NOW");
-    pcm_len = hm_voice_record(pcm, HM_VOICE_SECONDS * 16000 * 2, 16000);
+    pcm_len = hm_voice_record(pcm, HM_VOICE_SECONDS * HM_MIC_OUT_RATE_HZ * 2,
+                              g_hm_mic_hw_rate);
     /* 用实测速率声明上传参数：云端按声明速率把 PCM 包成 WAV 再交给
      * faster-whisper 重采样，声明错速率会让时间轴整体错掉。
      * 实测值带抖动（usleep 按 tick 取整、块边界不对齐），吸附到最近的
@@ -842,6 +882,33 @@ static int hm_voice_utterance_roundtrip(void)
     return 0;
 }
 
+/* 重入保护：CLI 的 `voice` 与 KWS 唤醒后的自动触发共用上面这份实现，两者跑在
+ * 不同线程上。重叠的后果有二：
+ *   1) 两个线程同时打开 /dev/audio/pcm_in0，破坏 NuttX 音频"单消费者"的
+ *      head/tail 记账（控制台会失去响应）；
+ *   2) 互踩函数内 static 的 pcm 缓冲 —— 先结束的一方 free(pcm) 并置 NULL，
+ *      另一方随后就把空 body 发了出去。实测端侧打印
+ *      `captured 76244 bytes` 却收到 `http=400 {"detail":"bad audio size"}`，
+ *      而代理侧抓到的请求头里**完全没有 Content-Length**（tls_write_request
+ *      只在 body && body_len>0 时才写这个头）—— 这就是空 body 的铁证。
+ * 所以这里加一道互斥：重叠的第二次调用直接放弃，下一轮再服务。 */
+static volatile int g_hm_voice_busy;
+
+static int hm_voice_utterance_roundtrip(void)
+{
+    int rc;
+
+    if (g_hm_voice_busy) {
+        printf("[Voice]: busy (KWS/CLI overlap), skip this round\n");
+        fflush(stdout);
+        return -1;
+    }
+    g_hm_voice_busy = 1;
+    rc = hm_voice_utterance_roundtrip_once();
+    g_hm_voice_busy = 0;
+    return rc;
+}
+
 /* 命令行入口：voice */
 static void cmd_voice(int argc, char **argv)
 {
@@ -885,11 +952,17 @@ static void cmd_i2sknob(int argc, char **argv)
         g_hm_i2s_rx_tot_chan = atoi(argv[5]);
     if (argc > 6)
         g_hm_i2s_rx_dbg = atoi(argv[6]);
+    if (argc > 7)
+        g_hm_mic_hw_rate = atoi(argv[7]);
+    if (argc > 8)
+        g_hm_mic_loop_us = atoi(argv[8]);
     printf("[I2SKNOB] half=%d bitsmod=%d chanbits=%d ws=%d totchan=%d dbg=%d "
-           "(-1=保持原行为)\n",
+           "micrate=%d loopus=%d "
+           "(-1=保持原行为; micrate=硬件请求速率Hz loopus=消费循环步长us)\n",
            g_hm_i2s_rx_half_bits, g_hm_i2s_rx_bits_mod,
            g_hm_i2s_rx_chan_bits, g_hm_i2s_rx_ws_width,
-           g_hm_i2s_rx_tot_chan, g_hm_i2s_rx_dbg);
+           g_hm_i2s_rx_tot_chan, g_hm_i2s_rx_dbg,
+           g_hm_mic_hw_rate, g_hm_mic_loop_us);
     fflush(stdout);
 }
 
@@ -954,7 +1027,9 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
     /* 采集时长按"想要多少字节 / 每秒多少字节"反推，与驱动实际速率无关：
      * want 字节 = rate*2 字节/秒 x 秒数。历史写法（写死块数上限）会让
      * "改录音时长"变成静默失败。 */
-    budget_ms = (want * 1000) / (rate * 2);
+    /* want 是**输出**字节数（归一化后的 16 kHz 单声道 16 bit）。预算必须按
+     * 输出率算：用硬件请求速率会让"请求速率翻倍"把录音时长直接砍半。 */
+    budget_ms = (want * 1000) / (HM_MIC_OUT_RATE_HZ * 2);
     if (budget_ms < 200)
         budget_ms = 200;
     memset(prev_chunk, 0, sizeof(prev_chunk));
@@ -1012,7 +1087,7 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
                  * 而 [STRM] 又证明消费端不是瓶颈（生产 640B/22ms 慢于
                  * 消费 640B/10ms），所以这里维持已知可用的 usleep(1 tick)，
                  * 只加计时把"到底谁慢"量化出来。 */
-                usleep(10000);
+                usleep((useconds_t)g_hm_mic_loop_us);
                 clock_gettime(CLOCK_MONOTONIC, &tb);
                 gap_ms = (long)(tb.tv_sec - ta.tv_sec) * 1000L +
                          (long)(tb.tv_nsec - ta.tv_nsec) / 1000000L;
@@ -1164,7 +1239,7 @@ static int hm_audio_stream_session(unsigned char *dst, int want, int rate)
 static void cmd_audio_stream(int argc, char **argv)
 {
     int seconds = 2;
-    int rate = 16000;
+    int rate = g_hm_mic_hw_rate;   /* 给硬件的请求速率，运行时旋钮 */
     int want;
     int got;
     unsigned char *buf;
@@ -1178,7 +1253,7 @@ static void cmd_audio_stream(int argc, char **argv)
         if (v > 0 && v <= 10)
             seconds = v;
     }
-    want = seconds * rate * 2;
+    want = seconds * HM_MIC_OUT_RATE_HZ * 2;   /* 输出侧字节数 */
     buf = (unsigned char *)malloc((size_t)want);
     if (!buf) {
         printf("[Audio-ERR] alloc\n");

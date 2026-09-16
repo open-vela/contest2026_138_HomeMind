@@ -911,7 +911,10 @@ static int tls_write_request(tls_ctx_t* ctx,
     const vela_header_t* headers,
     const char* body, size_t body_len)
 {
-    printf("[HM-NET] HTTP write start: %s %s\n", method, path);
+    /* body_len 用 printf（不是 syslog）——syslog 在 NuttX 上不进串口控制台，
+     * 定位 `bad audio size` 时必须能看到端侧自报的 body 长度。 */
+    printf("[HM-NET] HTTP write start: %s %s body=%zu\n",
+           method, path, body_len);
     /* Heap-allocate header buffer to reduce stack pressure.
      * This function is called from threads with limited stack
      * (outbound dispatch 16KB) and the TLS context already
